@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import time
 import os
 
-ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", "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"))
+ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
 
 # QQQ上位30銘柄
 QQQ_TOP30 = [
