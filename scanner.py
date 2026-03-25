@@ -146,99 +146,141 @@ with st.expander("📖 軍資金別 使える戦略ガイド"):
 
 scan_btn = st.button("🔍 今日のチャンス銘柄をスキャン", type="primary", use_container_width=True)
 
+@st.cache_data(ttl=3600)
 def scan_ticker(ticker):
     """1銘柄のスキャン"""
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
-        name = info.get('shortName', ticker)
+    import numpy as np
+    errors = []
+    for attempt in range(3):
+        try:
+            stock = yf.Ticker(ticker)
 
-        # HV計算（30日）
-        hist = stock.history(period='30d')
-        if hist.empty or price is None:
-            return None
-        import numpy as np
-        returns = hist['Close'].pct_change().dropna()
-        hv = float(returns.std() * (252 ** 0.5))
+            # fast_infoを優先（より安定）
+            try:
+                fi = stock.fast_info
+                price = fi.get('lastPrice') or fi.get('regularMarketPrice')
+            except Exception:
+                price = None
 
-        # IV取得（最短オプション）
-        expirations = stock.options
-        if not expirations:
-            return None
+            # fast_infoで取れなければinfoを試す
+            if not price:
+                try:
+                    info = stock.info
+                    price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+                    name = info.get('shortName', ticker)
+                except Exception:
+                    price = None
+                    name = ticker
+            else:
+                try:
+                    name = stock.info.get('shortName', ticker)
+                except Exception:
+                    name = ticker
 
-        # 20日以上先の満期日を選ぶ
-        target_exp = None
-        for exp in expirations:
-            exp_dt = datetime.strptime(exp, '%Y-%m-%d')
-            if exp_dt > datetime.now() + timedelta(days=20):
-                target_exp = exp
-                break
-        if not target_exp:
-            return None
+            # HV計算（30日）
+            hist = stock.history(period='30d')
+            if hist.empty:
+                errors.append(f"{ticker}: 株価履歴なし")
+                time.sleep(1)
+                continue
+            if not price:
+                # historyから価格を取得
+                price = float(hist['Close'].iloc[-1])
 
-        opt = stock.option_chain(target_exp)
-        puts = opt.puts
-        calls = opt.calls
-        if puts.empty or 'impliedVolatility' not in puts.columns:
-            return None
+            returns = hist['Close'].pct_change().dropna()
+            if len(returns) < 5:
+                errors.append(f"{ticker}: データ不足")
+                continue
+            hv = float(returns.std() * (252 ** 0.5))
 
-        puts['distance'] = abs(puts['strike'] - price)
-        atm_puts = puts.nsmallest(3, 'distance')
-        iv = float(atm_puts['impliedVolatility'].mean())
+            # IV取得（最短オプション）
+            try:
+                expirations = stock.options
+            except Exception as e:
+                errors.append(f"{ticker}: オプション取得失敗 {e}")
+                time.sleep(1)
+                continue
+            if not expirations:
+                errors.append(f"{ticker}: オプション満期日なし")
+                continue
 
-        # ATMプレミアム（コール）
-        atm_call_premium = None
-        if not calls.empty:
-            calls['distance'] = abs(calls['strike'] - price)
-            atm_calls = calls.nsmallest(3, 'distance')
-            atm_call_premium = float(atm_calls.iloc[0]['lastPrice']) if len(atm_calls) > 0 else None
+            # 20日以上先の満期日を選ぶ
+            target_exp = None
+            for exp in expirations:
+                exp_dt = datetime.strptime(exp, '%Y-%m-%d')
+                if exp_dt > datetime.now() + timedelta(days=20):
+                    target_exp = exp
+                    break
+            if not target_exp:
+                errors.append(f"{ticker}: 20日以上先の満期日なし")
+                continue
 
-        # スコアリング
-        iv_hv_ratio = iv / hv if hv > 0 else 1.0
+            opt = stock.option_chain(target_exp)
+            puts = opt.puts
+            calls = opt.calls
+            if puts.empty or 'impliedVolatility' not in puts.columns:
+                errors.append(f"{ticker}: プットデータなし")
+                continue
 
-        if iv_hv_ratio > 1.3 and iv > 0.25:
-            signal = "売りチャンス🔥"
-            strategy = "CSP or クレジットスプレッド"
-            score = iv_hv_ratio * iv * 100
-        elif iv_hv_ratio < 0.8 and hv > 0.25:
-            signal = "買いチャンス💡"
-            strategy = "デビットスプレッド"
-            score = (1 / iv_hv_ratio) * hv * 100
-        elif iv > 0.35:
-            signal = "売りチャンス🔥"
-            strategy = "アイアンコンドル"
-            score = iv * 80
-        else:
-            signal = "様子見👀"
-            strategy = "エントリー見送り"
-            score = 10
+            puts['distance'] = abs(puts['strike'] - price)
+            atm_puts = puts.nsmallest(3, 'distance')
+            iv = float(atm_puts['impliedVolatility'].mean())
 
-        # 軍資金関連
-        min_cap = calc_min_capital(price)
-        csp_cap = calc_csp_capital(price)
-        cap_label = get_capital_label(min_cap)
+            # ATMプレミアム（コール）
+            atm_call_premium = None
+            if not calls.empty:
+                calls['distance'] = abs(calls['strike'] - price)
+                atm_calls = calls.nsmallest(3, 'distance')
+                atm_call_premium = float(atm_calls.iloc[0]['lastPrice']) if len(atm_calls) > 0 else None
 
-        return {
-            'ticker': ticker,
-            'name': name,
-            'price': price,
-            'iv': iv,
-            'hv': hv,
-            'iv_hv_ratio': iv_hv_ratio,
-            'signal': signal,
-            'strategy': strategy,
-            'score': score,
-            'expiry': target_exp,
-            'atm_put_strike': float(atm_puts.iloc[0]['strike']) if len(atm_puts) > 0 else None,
-            'atm_put_premium': float(atm_puts.iloc[0]['lastPrice']) if len(atm_puts) > 0 else None,
-            'atm_call_premium': atm_call_premium,
-            'min_capital': min_cap,
-            'csp_capital': csp_cap,
-            'capital_label': cap_label,
-        }
-    except Exception as e:
-        return None
+            # スコアリング
+            iv_hv_ratio = iv / hv if hv > 0 else 1.0
+
+            if iv_hv_ratio > 1.3 and iv > 0.25:
+                signal = "売りチャンス🔥"
+                strategy = "CSP or クレジットスプレッド"
+                score = iv_hv_ratio * iv * 100
+            elif iv_hv_ratio < 0.8 and hv > 0.25:
+                signal = "買いチャンス💡"
+                strategy = "デビットスプレッド"
+                score = (1 / iv_hv_ratio) * hv * 100
+            elif iv > 0.35:
+                signal = "売りチャンス🔥"
+                strategy = "アイアンコンドル"
+                score = iv * 80
+            else:
+                signal = "様子見👀"
+                strategy = "エントリー見送り"
+                score = 10
+
+            # 軍資金関連
+            min_cap = calc_min_capital(price)
+            csp_cap = calc_csp_capital(price)
+            cap_label = get_capital_label(min_cap)
+
+            return {
+                'ticker': ticker,
+                'name': name,
+                'price': price,
+                'iv': iv,
+                'hv': hv,
+                'iv_hv_ratio': iv_hv_ratio,
+                'signal': signal,
+                'strategy': strategy,
+                'score': score,
+                'expiry': target_exp,
+                'atm_put_strike': float(atm_puts.iloc[0]['strike']) if len(atm_puts) > 0 else None,
+                'atm_put_premium': float(atm_puts.iloc[0]['lastPrice']) if len(atm_puts) > 0 else None,
+                'atm_call_premium': atm_call_premium,
+                'min_capital': min_cap,
+                'csp_capital': csp_cap,
+                'capital_label': cap_label,
+            }
+        except Exception as e:
+            errors.append(f"{ticker}: 例外 {type(e).__name__}: {e}")
+            time.sleep(1 + attempt)
+    # すべて失敗
+    return {'_error': True, 'ticker': ticker, 'reason': ' | '.join(errors)}
 
 if scan_btn:
     tickers = QQQ_TOP30 if "QQQ" in universe else SP500_TOP30
@@ -248,11 +290,14 @@ if scan_btn:
     status = st.empty()
 
     results = []
+    errors = []
     for i, ticker in enumerate(tickers):
         status.text(f"スキャン中: {ticker} ({i+1}/{len(tickers)})")
         r = scan_ticker(ticker)
-        if r:
+        if r and not r.get('_error'):
             results.append(r)
+        elif r and r.get('_error'):
+            errors.append(f"**{r['ticker']}**: {r['reason']}")
         progress.progress((i + 1) / len(tickers))
         time.sleep(0.3)
 
@@ -260,7 +305,12 @@ if scan_btn:
     status.empty()
 
     if not results:
-        st.error("データを取得できませんでした")
+        st.error("データを取得できませんでした。Yahoo Financeへの接続に問題がある可能性があります。")
+        if errors:
+            with st.expander("🔍 詳細エラー情報（開発者向け）"):
+                for e in errors[:10]:
+                    st.write(e)
+        st.info("💡 対処法：\n1. しばらく待ってから再スキャンしてください（1〜5分）\n2. 市場時間外（週末・夜間）は一部データが取得できない場合があります\n3. 問題が続く場合は開発者にお知らせください")
         st.stop()
 
     df = pd.DataFrame(results).sort_values('score', ascending=False)
