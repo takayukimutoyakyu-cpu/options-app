@@ -979,15 +979,15 @@ with tab1:
                         r_exp = r_ep_data.get('expiry', row['expiry'])
                         r_days = r_ep_data.get('days', '?')
                         r_strike = r_ep_data.get('strike', 0)
-                        prem_cols = (
-                            f'<div><span style="color:#718096;font-size:0.8rem;">{"支払う" if r_is_buy else "受け取る"}プレミアム（1枚）</span> '
-                            f'<strong style="color:{"#2b6cb0" if r_is_buy else "#276749"};">${r_prem_contract:,.0f}</strong></div>'
-                            f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{r_exp}</strong>'
-                            f'<span style="font-size:0.75rem;color:#e07b00;margin-left:4px;">{exp_window}目安→実際{r_days}日後</span></div>'
-                            f'<div><span style="color:#718096;font-size:0.8rem;">ストライク</span> <strong>${r_strike:.1f}</strong></div>'
-                        )
+                        r_pay_text = "支払う" if r_is_buy else "受け取る"
+                        r_prem_color = "#2b6cb0" if r_is_buy else "#276749"
+                        r_expiry_note = f"{exp_window}目安 実際{r_days}日後"
+                        prem_c1 = f'<div><span style="color:#718096;font-size:0.8rem;">{r_pay_text}プレミアム(1枚)</span>&nbsp;<strong style="color:{r_prem_color};">${r_prem_contract:,.0f}</strong></div>'
+                        prem_c2 = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span>&nbsp;<strong>{r_exp}</strong>&nbsp;<small style="color:#e07b00;">({r_expiry_note})</small></div>'
+                        prem_c3 = f'<div><span style="color:#718096;font-size:0.8rem;">ストライク</span>&nbsp;<strong>${r_strike:.1f}</strong></div>'
+                        prem_cols = prem_c1 + prem_c2 + prem_c3
                     else:
-                        prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{row["expiry"]}</strong></div>'
+                        prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span>&nbsp;<strong>{row["expiry"]}</strong></div>'
                 else:
                     strategy_name, _ = get_strategy_for_capital(capital, row['price'], row['signal'])
                     b_note = ""
