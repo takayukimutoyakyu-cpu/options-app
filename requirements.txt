@@ -3,3 +3,4 @@ yfinance
 anthropic
 pandas
 numpy
+streamlit-local-storage

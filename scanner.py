@@ -6,8 +6,81 @@ from datetime import datetime, timedelta
 import time
 import os
 import numpy as np
+import json
+
+try:
+    from streamlit_local_storage import LocalStorage
+    _local_storage_available = True
+except ImportError:
+    _local_storage_available = False
 
 ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
+
+# ========== プロフィール設定 ==========
+DEFAULT_PROFILE = {
+    "name": "",
+    "age_group": "30代",
+    "gender": "答えない",
+    "experience": "未経験",
+    "risk_tolerance": "バランス重視",
+    "investment_goal": "副収入を得たい",
+    "default_capital": 5000,
+    "broker": "サクソバンク証券",
+    "setup_done": False,
+}
+
+def get_personality_type(profile):
+    """プロフィールから投資パーソナリティを判定"""
+    risk = profile.get("risk_tolerance", "バランス重視")
+    exp = profile.get("experience", "未経験")
+    age = profile.get("age_group", "30代")
+    goal = profile.get("investment_goal", "副収入を得たい")
+    if risk == "低リスク重視" or age in ["60代以上"] or exp == "未経験" or goal == "資産を守りたい":
+        return "conservative"
+    elif risk == "高リターン重視" and exp in ["1〜3年", "3年以上"]:
+        return "aggressive"
+    else:
+        return "balanced"
+
+PERSONALITY_LABELS = {
+    "conservative": ("🛡️ 保守型", "#276749", "#f0fff4"),
+    "balanced":     ("⚖️ バランス型", "#2b6cb0", "#ebf8ff"),
+    "aggressive":   ("🚀 積極型", "#c53030", "#fff5f5"),
+}
+
+PERSONALITY_STRATEGY_HINT = {
+    "conservative": "リスクを抑えながら安定的にプレミアムを受け取る売り戦略（カバードコール・プット売り）が向いています。",
+    "balanced":     "状況に応じて売り・買い両方を使い分けるバランス型の戦略が向いています。",
+    "aggressive":   "方向性に賭けてリターンを最大化するコール/プット買いが向いています。少額から積極的に動けます。",
+}
+
+def load_profile(local_storage):
+    """localStorageからプロフィールを読み込む"""
+    if not _local_storage_available or local_storage is None:
+        return dict(DEFAULT_PROFILE)
+    try:
+        raw = local_storage.getItem("user_profile")
+        if raw and isinstance(raw, dict):
+            merged = dict(DEFAULT_PROFILE)
+            merged.update(raw)
+            return merged
+        if raw and isinstance(raw, str):
+            parsed = json.loads(raw)
+            merged = dict(DEFAULT_PROFILE)
+            merged.update(parsed)
+            return merged
+    except Exception:
+        pass
+    return dict(DEFAULT_PROFILE)
+
+def save_profile(local_storage, profile):
+    """localStorageにプロフィールを保存する"""
+    if not _local_storage_available or local_storage is None:
+        return
+    try:
+        local_storage.setItem("user_profile", profile)
+    except Exception:
+        pass
 
 # ========== 定数 ==========
 QQQ_TOP30 = [
@@ -69,6 +142,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# ========== LocalStorage 初期化 ==========
+_ls = None
+if _local_storage_available:
+    try:
+        _ls = LocalStorage()
+    except Exception:
+        _ls = None
+
+# セッション内プロフィールキャッシュ（再描画ごとに読み直さないように）
+if "profile" not in st.session_state:
+    st.session_state.profile = load_profile(_ls)
+
+profile = st.session_state.profile
+personality = get_personality_type(profile)
 
 # ========== カスタムCSS ==========
 st.markdown("""
@@ -618,8 +706,21 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ========== プロフィールバナー（設定済みの場合のみ表示） ==========
+if profile.get("setup_done"):
+    p_label, p_color, p_bg = PERSONALITY_LABELS[personality]
+    p_name = profile.get("name", "")
+    p_greeting = f"こんにちは、{p_name}さん！" if p_name else "プロフィール設定済み"
+    st.markdown(f"""
+    <div style="background:{p_bg};border:1.5px solid {p_color};border-radius:12px;padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div style="font-size:1.1rem;font-weight:700;color:{p_color};">{p_label}</div>
+        <div style="color:#4a5568;font-size:0.9rem;">{p_greeting}　|　{PERSONALITY_STRATEGY_HINT[personality]}</div>
+        <div style="margin-left:auto;font-size:0.8rem;color:#718096;">✏️ プロフィール変更は「👤 マイプロフィール」タブから</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # ========== タブ ==========
-tab1, tab2 = st.tabs(["　🔍 チャンス銘柄スキャナー　", "　📊 作戦ナビ（個別銘柄）　"])
+tab1, tab2, tab3 = st.tabs(["　🔍 チャンス銘柄スキャナー　", "　📊 作戦ナビ（個別銘柄）　", "　👤 マイプロフィール　"])
 
 # ==================== TAB 1: スキャナー ====================
 with tab1:
@@ -871,6 +972,23 @@ with tab1:
             top5 = df_affordable.head(5) if not df_affordable.empty else df.head(5)
             scan_summary = top5[['ticker','price','iv','hv','iv_hv_ratio','signal','strategy','min_capital']].to_string()
             broker_name = "サクソバンク証券" if is_saxo else "moomoo証券"
+            # プロフィール情報をプロンプトに追加
+            scan_profile = st.session_state.profile
+            scan_personality = get_personality_type(scan_profile)
+            profile_note = ""
+            if scan_profile.get("setup_done"):
+                p_name_s = scan_profile.get("name","")
+                profile_note = f"""
+【ユーザープロフィール】
+名前: {p_name_s if p_name_s else "未設定"}
+年齢層: {scan_profile.get("age_group","")}
+投資経験: {scan_profile.get("experience","")}
+リスクスタンス: {scan_profile.get("risk_tolerance","")}
+投資目的: {scan_profile.get("investment_goal","")}
+パーソナリティタイプ: {PERSONALITY_LABELS[scan_personality][0]}
+
+このプロフィールに合わせて、戦略推薦と説明のトーンを調整してください。
+保守型の場合は安定・安心を強調。積極型の場合はリターンの可能性を強調。バランス型は両面を説明。"""
             if is_beginner:
                 bkey = get_beginner_strategy("売りチャンス🔥", owns_stock, wants_100_shares)
                 bstrat = BEGINNER_STRATEGIES[bkey]
@@ -891,6 +1009,7 @@ with tab1:
             prompt = f"""あなたは米国株オプション取引の専門家です。
 {universe}のスキャン結果を基に分析してください。
 軍資金: ${capital:,} / 証券会社: {broker_name} / 日付: {datetime.now().strftime('%Y年%m月%d日')}
+{profile_note}
 {level_note}
 
 【スキャン結果】
@@ -1079,10 +1198,23 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
                 level_inst = "上級者向けにギリシャ文字・数値を積極的に使って分析してください。"
             broker_inst = "サクソバンク証券" if is_saxo2 else "moomoo証券"
             comp_name = ydata.get('company_name', ticker) if ydata else ticker
+            # 作戦ナビのプロフィールノート
+            nav_profile = st.session_state.profile
+            nav_personality = get_personality_type(nav_profile)
+            nav_profile_note = ""
+            if nav_profile.get("setup_done"):
+                nav_name = nav_profile.get("name","")
+                nav_profile_note = f"""
+【ユーザープロフィール】
+名前: {nav_name if nav_name else "未設定"} / 年齢層: {nav_profile.get("age_group","")} / 経験: {nav_profile.get("experience","")}
+リスクスタンス: {nav_profile.get("risk_tolerance","")} / 投資目的: {nav_profile.get("investment_goal","")}
+パーソナリティ: {PERSONALITY_LABELS[nav_personality][0]}
+このプロフィールに合わせた説明と戦略推薦をしてください。"""
 
             prompt = f"""あなたは米国株オプション取引の専門家です。
 【銘柄】{ticker}（{comp_name}） / 【軍資金】${capital2:,} / 【証券会社】{broker_inst}
 {market_data}
+{nav_profile_note}
 {level_inst}
 
 以下のフォーマットで日本語で回答してください：
@@ -1137,3 +1269,185 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
         c1.metric("分析銘柄", ticker)
         c2.metric("軍資金", f"${capital2:,}")
         c3.metric("証券会社", "サクソバンク" if is_saxo2 else "moomoo")
+
+# ==================== TAB 3: マイプロフィール ====================
+with tab3:
+    st.markdown('<div class="section-title">👤 マイプロフィール設定</div>', unsafe_allow_html=True)
+
+    if not _local_storage_available:
+        st.warning("⚠️ プロフィール保存機能は現在ご利用のブラウザでは使えません。セッション中のみ有効です。")
+
+    # 現在のプロフィール確認
+    current_profile = st.session_state.profile
+    is_setup_done = current_profile.get("setup_done", False)
+
+    if is_setup_done:
+        p_label, p_color, p_bg = PERSONALITY_LABELS[personality]
+        st.markdown(f"""
+        <div style="background:{p_bg};border:2px solid {p_color};border-radius:16px;padding:20px 24px;margin-bottom:24px;">
+            <div style="font-size:1.3rem;font-weight:800;color:{p_color};margin-bottom:8px;">{p_label} として登録済みです</div>
+            <div style="color:#4a5568;font-size:0.95rem;line-height:1.7;">{PERSONALITY_STRATEGY_HINT[personality]}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_info1, col_info2, col_info3 = st.columns(3)
+        with col_info1:
+            st.info(f"👤 {current_profile.get('name','未設定') or '未設定'}")
+        with col_info2:
+            st.info(f"🎂 {current_profile.get('age_group','')}")
+        with col_info3:
+            st.info(f"💼 経験 {current_profile.get('experience','')}")
+
+        col_inf2a, col_inf2b = st.columns(2)
+        with col_inf2a:
+            st.info(f"📊 リスク: {current_profile.get('risk_tolerance','')}")
+        with col_inf2b:
+            st.info(f"🎯 目標: {current_profile.get('investment_goal','')}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if not st.toggle("✏️ プロフィールを編集する", key="edit_profile_toggle"):
+            st.stop()
+
+    # ===== プロフィール入力フォーム =====
+    st.markdown("""
+    <div style="background:#f7fafc;border-radius:12px;padding:20px 24px;margin-bottom:20px;font-size:0.92rem;color:#4a5568;">
+    入力した情報はあなたのブラウザにのみ保存されます。サーバーには送信されません。<br>
+    一度設定すれば、次回からは自動で読み込まれます。
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("profile_form"):
+        st.markdown("#### 基本情報")
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            f_name = st.text_input(
+                "お名前（ニックネームOK）",
+                value=current_profile.get("name", ""),
+                placeholder="例: 田中 / たなか / Tanaka"
+            )
+        with col_f2:
+            f_age = st.selectbox(
+                "年齢層",
+                ["20代", "30代", "40代", "50代", "60代以上"],
+                index=["20代","30代","40代","50代","60代以上"].index(current_profile.get("age_group","30代"))
+            )
+        with col_f3:
+            f_gender = st.selectbox(
+                "性別",
+                ["男性", "女性", "答えない"],
+                index=["男性","女性","答えない"].index(current_profile.get("gender","答えない"))
+            )
+
+        st.markdown("#### 投資に関して")
+        col_f4, col_f5 = st.columns(2)
+        with col_f4:
+            f_exp = st.selectbox(
+                "投資経験",
+                ["未経験（株・オプション共に）", "株は経験あり・オプションは未経験", "オプション経験1年未満", "オプション経験1〜3年", "オプション経験3年以上"],
+                index=["未経験（株・オプション共に）","株は経験あり・オプションは未経験","オプション経験1年未満","オプション経験1〜3年","オプション経験3年以上"].index(
+                    current_profile.get("experience","未経験（株・オプション共に）")
+                    if current_profile.get("experience","") in ["未経験（株・オプション共に）","株は経験あり・オプションは未経験","オプション経験1年未満","オプション経験1〜3年","オプション経験3年以上"]
+                    else "未経験（株・オプション共に）"
+                )
+            )
+        with col_f5:
+            f_risk = st.selectbox(
+                "リスクに対するスタンス",
+                ["低リスク重視（損するのが怖い）", "バランス重視（リスクとリターンのバランスをとりたい）", "高リターン重視（リスクをとってでも大きく稼ぎたい）"],
+                index=["低リスク重視（損するのが怖い）","バランス重視（リスクとリターンのバランスをとりたい）","高リターン重視（リスクをとってでも大きく稼ぎたい）"].index(
+                    current_profile.get("risk_tolerance","バランス重視（リスクとリターンのバランスをとりたい）")
+                    if current_profile.get("risk_tolerance","") in ["低リスク重視（損するのが怖い）","バランス重視（リスクとリターンのバランスをとりたい）","高リターン重視（リスクをとってでも大きく稼ぎたい）"]
+                    else "バランス重視（リスクとリターンのバランスをとりたい）"
+                )
+            )
+
+        f_goal = st.selectbox(
+            "オプション投資の目的",
+            ["毎月の副収入を安定的に得たい", "資産をじっくり守りながら増やしたい", "短期で大きなリターンを狙いたい", "まずは少額で体験・学習したい"],
+            index=["毎月の副収入を安定的に得たい","資産をじっくり守りながら増やしたい","短期で大きなリターンを狙いたい","まずは少額で体験・学習したい"].index(
+                current_profile.get("investment_goal","毎月の副収入を安定的に得たい")
+                if current_profile.get("investment_goal","") in ["毎月の副収入を安定的に得たい","資産をじっくり守りながら増やしたい","短期で大きなリターンを狙いたい","まずは少額で体験・学習したい"]
+                else "毎月の副収入を安定的に得たい"
+            )
+        )
+
+        st.markdown("#### デフォルト設定")
+        col_f6, col_f7 = st.columns(2)
+        with col_f6:
+            f_capital = st.number_input(
+                "よく使う軍資金（ドル）",
+                value=int(current_profile.get("default_capital", 5000)),
+                min_value=200, step=500
+            )
+        with col_f7:
+            f_broker = st.selectbox(
+                "証券会社",
+                ["サクソバンク証券", "moomoo証券"],
+                index=["サクソバンク証券","moomoo証券"].index(
+                    current_profile.get("broker","サクソバンク証券")
+                    if current_profile.get("broker","") in ["サクソバンク証券","moomoo証券"]
+                    else "サクソバンク証券"
+                )
+            )
+
+        submitted = st.form_submit_button("💾 プロフィールを保存する", type="primary", use_container_width=True)
+
+    if submitted:
+        # risk_toleranceを短縮キーに変換（内部判定用）
+        risk_map = {
+            "低リスク重視（損するのが怖い）": "低リスク重視",
+            "バランス重視（リスクとリターンのバランスをとりたい）": "バランス重視",
+            "高リターン重視（リスクをとってでも大きく稼ぎたい）": "高リターン重視",
+        }
+        exp_map = {
+            "未経験（株・オプション共に）": "未経験",
+            "株は経験あり・オプションは未経験": "未経験",
+            "オプション経験1年未満": "1年未満",
+            "オプション経験1〜3年": "1〜3年",
+            "オプション経験3年以上": "3年以上",
+        }
+        goal_map = {
+            "毎月の副収入を安定的に得たい": "副収入を得たい",
+            "資産をじっくり守りながら増やしたい": "資産を守りたい",
+            "短期で大きなリターンを狙いたい": "大きく増やしたい",
+            "まずは少額で体験・学習したい": "副収入を得たい",
+        }
+        new_profile = {
+            "name": f_name.strip(),
+            "age_group": f_age,
+            "gender": f_gender,
+            "experience": exp_map.get(f_exp, "未経験"),
+            "risk_tolerance": risk_map.get(f_risk, "バランス重視"),
+            "investment_goal": goal_map.get(f_goal, "副収入を得たい"),
+            "default_capital": int(f_capital),
+            "broker": f_broker,
+            "setup_done": True,
+        }
+        save_profile(_ls, new_profile)
+        st.session_state.profile = new_profile
+        ptype = get_personality_type(new_profile)
+        p_label_new, p_color_new, p_bg_new = PERSONALITY_LABELS[ptype]
+        st.success(f"✅ プロフィールを保存しました！")
+        st.markdown(f"""
+        <div style="background:{p_bg_new};border:2px solid {p_color_new};border-radius:16px;padding:20px 24px;margin-top:16px;">
+            <div style="font-size:1.2rem;font-weight:800;color:{p_color_new};">あなたのタイプ: {p_label_new}</div>
+            <div style="color:#4a5568;font-size:0.95rem;margin-top:8px;">{PERSONALITY_STRATEGY_HINT[ptype]}</div>
+            <div style="margin-top:12px;font-size:0.85rem;color:#718096;">次回からは自動でプロフィールが読み込まれます。「チャンス銘柄スキャナー」タブに移動して分析を始めましょう！</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.balloons()
+
+    # プロフィール削除
+    if is_setup_done:
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("🗑️ プロフィールを削除する"):
+            st.warning("削除すると保存済みのプロフィールが消えます。次回アクセス時に再入力が必要になります。")
+            if st.button("プロフィールを削除する", key="delete_profile"):
+                if _ls:
+                    try:
+                        _ls.deleteItem("user_profile")
+                    except Exception:
+                        pass
+                st.session_state.profile = dict(DEFAULT_PROFILE)
+                st.success("プロフィールを削除しました。")
+                st.rerun()
