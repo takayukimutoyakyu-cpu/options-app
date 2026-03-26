@@ -418,11 +418,36 @@ def scan_ticker(ticker):
                 errors.append(f"{ticker}: オプション満期日なし"); continue
 
             target_exp = None
+            preferred_min_days = 20
             for exp in expirations:
-                if datetime.strptime(exp, '%Y-%m-%d') > datetime.now() + timedelta(days=20):
+                days = (datetime.strptime(exp, '%Y-%m-%d') - datetime.now()).days
+                if days >= preferred_min_days:
                     target_exp = exp; break
             if not target_exp:
                 errors.append(f"{ticker}: 20日以上先の満期日なし"); continue
+
+            # 複数満期日のプレミアムを取得（30/60/90/180日）
+            expiry_premiums = {}
+            for exp in expirations:
+                days = (datetime.strptime(exp, '%Y-%m-%d') - datetime.now()).days
+                for label, lo, hi in [("30日",20,45),("60日",46,75),("90日",76,120),("180日",121,200)]:
+                    if lo <= days <= hi and label not in expiry_premiums:
+                        try:
+                            oc = stock.option_chain(exp)
+                            if not oc.calls.empty and not oc.puts.empty:
+                                oc.calls['distance'] = abs(oc.calls['strike'] - price)
+                                oc.puts['distance']  = abs(oc.puts['strike']  - price)
+                                c_atm = oc.calls.nsmallest(1,'distance').iloc[0]
+                                p_atm = oc.puts.nsmallest(1,'distance').iloc[0]
+                                expiry_premiums[label] = {
+                                    'expiry': exp,
+                                    'days': days,
+                                    'call_premium': float(c_atm['lastPrice']),
+                                    'put_premium':  float(p_atm['lastPrice']),
+                                    'strike':       float(c_atm['strike']),
+                                }
+                        except Exception:
+                            pass
 
             opt = stock.option_chain(target_exp)
             puts, calls = opt.puts, opt.calls
@@ -461,6 +486,7 @@ def scan_ticker(ticker):
                 'min_capital': min_cap, 'csp_capital': calc_csp_capital(price),
                 'capital_label': get_capital_label(min_cap),
                 'direction': direction, 'rsi': rsi, 'ma5': ma5, 'ma20': ma20,
+                'expiry_premiums': expiry_premiums,
             }
         except Exception as e:
             errors.append(f"{ticker}: {type(e).__name__}: {e}"); time.sleep(1 + attempt)
@@ -559,6 +585,39 @@ with c3:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ========== よくある質問（FAQ） ==========
+st.markdown("""
+<div style="background:#f7fafc;border-radius:16px;padding:28px 32px;margin-bottom:24px;">
+    <div style="font-size:1.15rem;font-weight:700;color:#2d3748;margin-bottom:20px;">❓ 初心者がよく聞く質問</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
+            <div style="font-weight:700;color:#2b6cb0;margin-bottom:8px;">💰 いくら必要ですか？</div>
+            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
+                <strong>コール/プット買い</strong>なら <strong style="color:#2b6cb0;">$200〜$500</strong> から始められます（プレミアム代のみ）。<br><br>
+                <strong>プット売り（CSP）</strong>は株価×100株分の担保が必要なので、例えばAPPLなら約 <strong style="color:#e53e3e;">$18,000〜</strong>。<br><br>
+                まずは <strong>コール/プット買いで小額からスタート</strong> するのが初心者向けです。
+            </div>
+        </div>
+        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
+            <div style="font-weight:700;color:#276749;margin-bottom:8px;">🌱 少額でもできますか？</div>
+            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
+                <strong>はい、できます！</strong><br><br>
+                <strong style="color:#276749;">$200〜$500</strong> あれば「コール買い」「プット買い」が可能です。<br><br>
+                安い株（例：インテルなど）のオプションなら <strong>$50〜$100</strong> 程度のプレミアムもあります。下のスキャナーで実際の金額を確認してください。
+            </div>
+        </div>
+        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
+            <div style="font-weight:700;color:#744210;margin-bottom:8px;">📚 株をやったことなくても大丈夫？</div>
+            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
+                <strong>大丈夫です！</strong><br><br>
+                このアプリの <strong>🔰 初心者モード</strong> を使えば、AIが「どの銘柄を・どんな戦略で・いくらで入るか」を具体的に提案します。<br><br>
+                まずは <strong>少額のコール/プット買い</strong> から体験してみましょう。
+            </div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 # ========== タブ ==========
 tab1, tab2 = st.tabs(["　🔍 チャンス銘柄スキャナー　", "　📊 作戦ナビ（個別銘柄）　"])
 
@@ -633,6 +692,16 @@ with tab1:
             )
             wants_100_shares = "はい" in q2
 
+        exp_window = st.select_slider(
+            "📅 満期日の目安（何日後を狙う？）",
+            options=["30日", "60日", "90日", "180日"],
+            value="60日",
+            key="exp_window_scan"
+        )
+        st.caption("短い満期日ほど動きが速くハイリスク・ハイリターン。長い満期日ほど余裕があり初心者向けです。")
+    else:
+        exp_window = "60日"
+
     st.markdown("<br>", unsafe_allow_html=True)
     scan_btn = st.button("🔍 今日のチャンス銘柄をスキャンする", type="primary", use_container_width=True)
 
@@ -684,10 +753,27 @@ with tab1:
                 strategy_name = f"{bstrat['emoji']} {bstrat['name']}"
                 dir_label = {"bullish":"📈 上昇トレンド","bearish":"📉 下落トレンド","neutral":"➡️ 方向感なし"}.get(top_dir,"")
                 rsi_val = top.get('rsi', '')
+                # プレミアム表示
+                ep = top.get('expiry_premiums', {})
+                ep_data = ep.get(exp_window, {})
+                is_buy = bkey in ("call_buy", "put_buy")
+                if ep_data:
+                    prem_val = ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                    prem_per_contract = prem_val * 100
+                    prem_html = f'<div><div style="font-size:0.75rem;color:#718096;">{"支払う" if is_buy else "受け取る"}プレミアム（1枚）</div><strong style="font-size:1.3rem;color:{"#2b6cb0" if is_buy else "#276749"};">${prem_per_contract:,.0f}</strong><span style="font-size:0.75rem;color:#718096;">（満期{exp_window}）</span></div>'
+                    exp_show = ep_data.get('expiry', top['expiry'])
+                    strike_html = f'<div><div style="font-size:0.75rem;color:#718096;">ATMストライク</div><strong style="font-size:1.1rem;">${ep_data.get("strike",0):.1f}</strong></div>'
+                else:
+                    prem_html = ""
+                    exp_show = top['expiry']
+                    strike_html = ""
                 strategy_note = f'<div style="font-size:0.82rem;color:#555;margin-top:8px;background:#f7fafc;border-radius:8px;padding:8px 12px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>🔎 テクニカル: {dir_label}{"（RSI: "+str(rsi_val)+"）" if rsi_val else ""}</div>'
             else:
                 strategy_name, _ = get_strategy_for_capital(capital, top['price'], top['signal'])
                 strategy_note = ""
+                prem_html = ""
+                exp_show = top['expiry']
+                strike_html = ""
             st.markdown(f"""
             <div class="chance-card {signal_class}">
                 <div class="rank-badge">🥇 本日 No.1 チャンス銘柄</div><br>
@@ -697,10 +783,10 @@ with tab1:
                 <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;">
                 <div style="display:flex;gap:32px;flex-wrap:wrap;">
                     <div><div style="font-size:0.75rem;color:#718096;">株価</div><strong style="font-size:1.3rem;">${top['price']:.2f}</strong></div>
-                    <div><div style="font-size:0.75rem;color:#718096;">IV（オプション割高感）</div><strong style="font-size:1.3rem;">{top['iv']:.1%}</strong></div>
-                    <div><div style="font-size:0.75rem;color:#718096;">HV（実際の変動）</div><strong style="font-size:1.3rem;">{top['hv']:.1%}</strong></div>
+                    {prem_html if is_beginner else f'<div><div style="font-size:0.75rem;color:#718096;">IV</div><strong style="font-size:1.3rem;">{top["iv"]:.1%}</strong></div><div><div style="font-size:0.75rem;color:#718096;">HV</div><strong style="font-size:1.3rem;">{top["hv"]:.1%}</strong></div>'}
+                    {strike_html if is_beginner else ""}
                     <div><div style="font-size:0.75rem;color:#718096;">推奨戦略</div><strong style="font-size:1.1rem;">{strategy_name}</strong></div>
-                    <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{top['expiry']}</strong></div>
+                    <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{exp_show}</strong></div>
                     <div><div style="font-size:0.75rem;color:#718096;">必要資金</div><strong style="font-size:1.1rem;">${top['min_capital']:,}〜</strong></div>
                 </div>
                 {strategy_note}
@@ -726,13 +812,25 @@ with tab1:
                     dir_label = {"bullish":"📈 上昇トレンド","bearish":"📉 下落トレンド","neutral":"➡️ 方向感なし"}.get(row_dir,"")
                     rsi_v = row.get('rsi','')
                     b_note = f'<div style="font-size:0.82rem;color:#555;margin-top:8px;background:#f7fafc;border-radius:8px;padding:8px 12px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>💰 必要: {bstrat["required"]}<br>🔎 テクニカル: {dir_label}{"（RSI: "+str(rsi_v)+"）" if rsi_v else ""}</div>'
+                    # プレミアム表示（初心者モード）
+                    r_ep = row.get('expiry_premiums', {})
+                    r_ep_data = r_ep.get(exp_window, {}) if isinstance(r_ep, dict) else {}
+                    r_is_buy = bkey in ("call_buy", "put_buy")
+                    if r_ep_data:
+                        r_prem = r_ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                        r_prem_contract = r_prem * 100
+                        r_exp = r_ep_data.get('expiry', row['expiry'])
+                        r_strike = r_ep_data.get('strike', 0)
+                        prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">{"支払う" if r_is_buy else "受け取る"}プレミアム（1枚）</span> <strong style="color:{"#2b6cb0" if r_is_buy else "#276749"};">${r_prem_contract:,.0f}</strong></div><div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{r_exp}</strong></div><div><span style="color:#718096;font-size:0.8rem;">ストライク</span> <strong>${r_strike:.1f}</strong></div>'
+                    else:
+                        prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{row["expiry"]}</strong></div>'
                 else:
                     strategy_name, _ = get_strategy_for_capital(capital, row['price'], row['signal'])
                     b_note = ""
+                    prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{row["expiry"]}</strong></div>'
                 signal_class = "sell" if "売り" in row['signal'] else ("buy" if "買い" in row['signal'] else "wait")
                 signal_html = f'<span class="signal-sell">{row["signal"]}</span>' if "売り" in row['signal'] else (f'<span class="signal-buy">{row["signal"]}</span>' if "買い" in row['signal'] else f'<span class="signal-wait">{row["signal"]}</span>')
-                put_txt = f"Putプレミアム: <strong>${row['atm_put_premium']:.2f}</strong>" if row.get('atm_put_premium') else ""
-                call_txt = f"Callプレミアム: <strong>${row['atm_call_premium']:.2f}</strong>" if row.get('atm_call_premium') else ""
+                iv_hv_cols = "" if is_beginner else f'<div><span style="color:#718096;font-size:0.8rem;">IV</span> <strong>{row["iv"]:.1%}</strong></div><div><span style="color:#718096;font-size:0.8rem;">HV</span> <strong>{row["hv"]:.1%}</strong></div>'
 
                 st.markdown(f"""
                 <div class="chance-card {signal_class}">
@@ -741,13 +839,10 @@ with tab1:
                     &nbsp;&nbsp;{signal_html}
                     <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px;">
                         <div><span style="color:#718096;font-size:0.8rem;">株価</span> <strong>${row['price']:.2f}</strong></div>
-                        <div><span style="color:#718096;font-size:0.8rem;">IV</span> <strong>{row['iv']:.1%}</strong></div>
-                        <div><span style="color:#718096;font-size:0.8rem;">HV</span> <strong>{row['hv']:.1%}</strong></div>
+                        {iv_hv_cols}
                         <div><span style="color:#718096;font-size:0.8rem;">戦略</span> <strong>{strategy_name}</strong></div>
-                        <div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{row['expiry']}</strong></div>
+                        {prem_cols}
                         <div><span style="color:#718096;font-size:0.8rem;">必要資金</span> <strong>${row['min_capital']:,}〜</strong></div>
-                        {f'<div>{put_txt}</div>' if put_txt else ''}
-                        {f'<div>{call_txt}</div>' if call_txt else ''}
                     </div>
                     {b_note}
                 </div>
