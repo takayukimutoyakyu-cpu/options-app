@@ -327,6 +327,42 @@ button[data-baseweb="tab"] {
 /* フッター非表示 */
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
+
+/* ===== モバイル対応 ===== */
+@media (max-width: 768px) {
+    .hero {
+        padding: 28px 16px;
+        border-radius: 12px;
+    }
+    .hero h1 {
+        font-size: 1.6rem;
+    }
+    .hero p {
+        font-size: 0.95rem;
+    }
+    .feature-card {
+        padding: 16px;
+        border-radius: 12px;
+    }
+    .faq-grid {
+        grid-template-columns: 1fr !important;
+    }
+    .chance-card {
+        padding: 16px;
+    }
+    .section-title {
+        font-size: 1.1rem;
+    }
+    button[data-baseweb="tab"] {
+        font-size: 0.85rem !important;
+        padding: 10px 12px !important;
+    }
+}
+@media (max-width: 480px) {
+    .hero h1 {
+        font-size: 1.3rem;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -528,12 +564,12 @@ def scan_ticker(ticker):
 
             hist = stock.history(period='30d')
             if hist.empty:
-                errors.append(f"{ticker}: 株価履歴なし"); time.sleep(1); continue
+                errors.append(f"{ticker}: 株価データが見つかりませんでした（市場が休場の可能性があります）"); time.sleep(1); continue
             if not price:
                 price = float(hist['Close'].iloc[-1])
             returns = hist['Close'].pct_change().dropna()
             if len(returns) < 5:
-                errors.append(f"{ticker}: データ不足"); continue
+                errors.append(f"{ticker}: 株価データが不足しています（上場直後の銘柄などが該当します）"); continue
             hv = float(returns.std() * (252 ** 0.5))
 
             # テクニカル指標
@@ -541,9 +577,9 @@ def scan_ticker(ticker):
 
             try: expirations = stock.options
             except Exception as e:
-                errors.append(f"{ticker}: オプション取得失敗"); time.sleep(1); continue
+                errors.append(f"{ticker}: オプションデータを取得できませんでした（通信エラーの可能性があります）"); time.sleep(1); continue
             if not expirations:
-                errors.append(f"{ticker}: オプション満期日なし"); continue
+                errors.append(f"{ticker}: この銘柄にはオプション取引がありません"); continue
 
             target_exp = None
             preferred_min_days = 20
@@ -552,7 +588,7 @@ def scan_ticker(ticker):
                 if days >= preferred_min_days:
                     target_exp = exp; break
             if not target_exp:
-                errors.append(f"{ticker}: 20日以上先の満期日なし"); continue
+                errors.append(f"{ticker}: 20日以上先の満期日が見つかりませんでした"); continue
 
             # 複数満期日のプレミアムを取得（30/60/90/180日）
             expiry_premiums = {}
@@ -580,8 +616,7 @@ def scan_ticker(ticker):
             opt = stock.option_chain(target_exp)
             puts, calls = opt.puts, opt.calls
             if puts.empty or 'impliedVolatility' not in puts.columns:
-                errors.append(f"{ticker}: プットデータなし"); continue
-
+                errors.append(f"{ticker}: プットオプションのデータが取得できませんでした"); continue
             puts['distance'] = abs(puts['strike'] - price)
             atm_puts = puts.nsmallest(3, 'distance')
             iv = float(atm_puts['impliedVolatility'].mean())
@@ -617,7 +652,7 @@ def scan_ticker(ticker):
                 'expiry_premiums': expiry_premiums,
             }
         except Exception as e:
-            errors.append(f"{ticker}: {type(e).__name__}: {e}"); time.sleep(1 + attempt)
+            errors.append(f"{ticker}: データ取得中にエラーが発生しました（{type(e).__name__}）"); time.sleep(1 + attempt)
     return {'_error': True, 'ticker': ticker, 'reason': ' | '.join(errors)}
 
 @st.cache_data(ttl=3600)
@@ -672,7 +707,13 @@ def get_yahoo_data(ticker):
         result['status'] = '成功'
         return result, None
     except Exception as e:
-        return None, str(e)
+        error_msg = str(e)
+        if "No data found" in error_msg or "not found" in error_msg.lower():
+            return None, f"「{ticker}」という銘柄が見つかりませんでした。ティッカーシンボルを確認してください。"
+        elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+            return None, "通信エラーが発生しました。インターネット接続を確認してください。"
+        else:
+            return None, f"データ取得中にエラーが発生しました。しばらく時間をおいて再度お試しください。"
 
 # ========== ヒーローセクション ==========
 st.markdown(f"""
@@ -717,7 +758,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("""
 <div style="background:#f7fafc;border-radius:16px;padding:28px 32px;margin-bottom:24px;">
     <div style="font-size:1.15rem;font-weight:700;color:#2d3748;margin-bottom:20px;">❓ 初心者がよく聞く質問</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+    <div class="faq-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
         <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
             <div style="font-weight:700;color:#2b6cb0;margin-bottom:8px;">💰 いくら必要ですか？</div>
             <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
@@ -878,9 +919,9 @@ with tab1:
         status.empty()
 
         if not results:
-            st.error("データを取得できませんでした。しばらく待ってから再スキャンしてください。")
+            st.error("😥 データを取得できませんでした。米国市場が休場の可能性があります。しばらく時間をおいてから再スキャンしてください。")
             if errors:
-                with st.expander("詳細エラー情報"):
+                with st.expander("🔍 うまくいかなかった理由を確認する"):
                     for e in errors[:10]: st.write(e)
             st.stop()
 
@@ -1068,6 +1109,9 @@ with tab1:
             else:
                 level_note = "上級者向けに、専門用語・ギリシャ文字・数値を積極的に使って分析してください。"
 
+            if not ANTHROPIC_API_KEY:
+                st.warning("⚠️ AI分析機能を使うにはAPIキーの設定が必要です。管理者にお問い合わせください。")
+                st.stop()
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             prompt = f"""あなたは米国株オプション取引の専門家です。
 {universe}のスキャン結果を基に分析してください。
@@ -1090,12 +1134,17 @@ with tab1:
 
 ## 💡 {broker_name}ユーザーへのアドバイス
 """
-            msg = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            st.markdown(msg.content[0].text)
+            try:
+                msg = client.messages.create(
+                    model="claude-opus-4-6",
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                st.markdown(msg.content[0].text)
+            except Exception as e:
+                st.error("😥 AI分析中にエラーが発生しました。しばらく時間をおいて再度お試しください。")
+                with st.expander("🔍 エラーの詳細を確認する"):
+                    st.write(str(e))
 
 # ==================== TAB 2: 作戦ナビ ====================
 with tab2:
@@ -1166,13 +1215,20 @@ with tab2:
         """, unsafe_allow_html=True)
 
     elif go and not company:
-        st.warning("企業名またはティッカーを入力してください")
+        st.warning("📝 企業名またはティッカーシンボルを入力してください（例：テスラ、AAPL、エヌビディア）")
 
     elif go and company:
         ticker = TICKER_MAP.get(company.lower(), company.upper())
 
         with st.spinner(f"{ticker} のリアルタイムデータを取得中..."):
             ydata, yerr = get_yahoo_data(ticker)
+
+        if not ydata:
+            st.error(f"😥 「{ticker}」のデータを取得できませんでした。銘柄名が正しいか確認してください。\n\n入力例：テスラ → TSLA、アップル → AAPL、エヌビディア → NVDA")
+            if yerr:
+                with st.expander("🔍 エラーの詳細を確認する"):
+                    st.write(yerr)
+            st.stop()
 
         if ydata:
             price = ydata.get('price', 0) or 0
@@ -1317,15 +1373,25 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
 
 ### 💡 今の相場環境コメント
 """
+            if not ANTHROPIC_API_KEY:
+                st.warning("⚠️ AI分析機能を使うにはAPIキーの設定が必要です。管理者にお問い合わせください。")
+                st.stop()
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            advice = msg.content[0].text
+            try:
+                msg = client.messages.create(
+                    model="claude-opus-4-6",
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                advice = msg.content[0].text
+            except Exception as e:
+                advice = None
+                st.error("😥 AI分析中にエラーが発生しました。しばらく時間をおいて再度お試しください。")
+                with st.expander("🔍 エラーの詳細を確認する"):
+                    st.write(str(e))
 
-        st.markdown(advice)
+        if advice:
+            st.markdown(advice)
 
         # 証券会社別注文手順
         if ydata:
