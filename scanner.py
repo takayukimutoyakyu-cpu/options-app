@@ -239,64 +239,111 @@ def get_strategy_for_capital(capital, price, signal):
         else:
             return "デビットコールスプレッド", min_cap
 
-# 初心者向け4戦略マッピング
+# 初心者向け5戦略マッピング
 BEGINNER_STRATEGIES = {
     "covered_call": {
         "name": "コール売り（カバードコール）",
         "emoji": "📤",
         "tag": "安定収入型",
-        "desc": "すでに100株持っている方向け。株を持ちながら権利を売って毎月コツコツ稼ぐ戦略。",
-        "risk": "株価が大きく上がると利益が限定される",
+        "desc": "すでに100株持っている方向け。株を持ちながら「上値の権利」を売って毎月コツコツプレミアムを受け取る戦略。",
+        "risk": "株価が権利行使価格を超えると利益が上限になる",
         "required": "対象銘柄の株を100株保有していること",
     },
     "csp": {
-        "name": "プット売り（100株を買う権利を売る）",
+        "name": "プット売り（100株購入あり・CSP）",
         "emoji": "💵",
         "tag": "株を安く買いたい方向け",
-        "desc": "「この株を〇〇ドルで買います」と約束してプレミアムを受け取る戦略。株価が下がらなければそのまま利益。下がっても買いたい株ならOK。",
+        "desc": "「この株を〇〇ドルで買います」と約束してプレミアムを先に受け取る戦略。株価が下がらなければそのまま利益。下がっても買いたい株ならOK。",
         "risk": "株価が大幅下落すると100株を高値で買わされる",
         "required": "100株分の購入資金（株価×100ドル）",
     },
-    "put_spread": {
-        "name": "プット売り（100株購入なし・スプレッド）",
-        "emoji": "🛡️",
-        "tag": "少額でできる売り戦略",
-        "desc": "100株を買わなくてよいバージョン。2つのオプションを組み合わせてリスクを限定しながらプレミアムを受け取る。",
-        "risk": "最大損失が限定されるが、利益も限定される",
-        "required": "数百〜数千ドル（スプレッド幅×100）",
+    "otm_put_sell": {
+        "name": "プット売り（100株購入なし・OTM遠め）",
+        "emoji": "🎯",
+        "tag": "プレミアムだけ受け取る戦略",
+        "desc": "現在の株価から大きく離れた（10〜20%下の）ストライクのプットを売る。株が多少下がってもOKな余裕のある場所を狙い、プレミアムを受け取る。プレミアムが半分になった時点で反対売買（買い戻し）して利確。100株購入は不要。",
+        "risk": "株が急落してストライクを大きく下回ると損失が膨らむ（損切りルール厳守）",
+        "required": "証拠金（ブローカーによる。数千ドル程度）",
     },
     "call_buy": {
-        "name": "コール買い（爆益戦略 その1）",
+        "name": "コール買い（爆益戦略 その1）🚀",
         "emoji": "🚀",
         "tag": "上昇を狙う・ハイリスクハイリターン",
-        "desc": "株が上がると予想したときに、少ない資金で大きな利益を狙う戦略。当たれば数倍になることも。外れるとゼロになるリスクあり。",
-        "risk": "株が上がらなければ投資額がゼロになる",
+        "desc": "株が上がると予想したときに、少ない資金で大きな利益を狙う戦略。RSI・移動平均が上昇トレンドを示しているときに有効。当たれば数倍になることも。",
+        "risk": "株が上がらなければ投資額がゼロになる（買ったプレミアム全額損失）",
         "required": "数百〜数千ドル（プレミアム×100）",
     },
     "put_buy": {
-        "name": "プット買い（爆益戦略 その2）",
+        "name": "プット買い（爆益戦略 その2）📉",
         "emoji": "📉",
         "tag": "下落を狙う・ハイリスクハイリターン",
-        "desc": "株が下がると予想したときに使う戦略。暴落局面では数倍〜数十倍になることも。外れるとゼロになるリスクあり。",
-        "risk": "株が下がらなければ投資額がゼロになる",
+        "desc": "株が下がると予想したときに使う戦略。RSI・移動平均が下落トレンドを示しているときに有効。暴落局面では数倍〜数十倍になることも。",
+        "risk": "株が下がらなければ投資額がゼロになる（買ったプレミアム全額損失）",
         "required": "数百〜数千ドル（プレミアム×100）",
     },
 }
 
-def get_beginner_strategy(signal, owns_stock, wants_100_shares):
-    """初心者モード用：4戦略から最適なものを返す"""
+def calc_technical_direction(hist):
+    """RSI・移動平均線から方向性を判定する（上昇/下落/中立）"""
+    if hist is None or len(hist) < 20:
+        return "neutral", 50, None, None
+
+    close = hist['Close']
+
+    # 移動平均
+    ma5  = close.rolling(5).mean().iloc[-1]
+    ma20 = close.rolling(20).mean().iloc[-1]
+    current = close.iloc[-1]
+
+    # RSI（14日）
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    rsi   = float(100 - 100 / (1 + rs.iloc[-1]))
+
+    # 直近5日のモメンタム（%）
+    momentum = float((current - close.iloc[-5]) / close.iloc[-5] * 100) if len(close) >= 5 else 0
+
+    # 判定
+    bullish_score = 0
+    if current > ma5:   bullish_score += 1
+    if ma5 > ma20:      bullish_score += 1
+    if rsi > 55:        bullish_score += 1
+    if momentum > 1:    bullish_score += 1
+
+    bearish_score = 0
+    if current < ma5:   bearish_score += 1
+    if ma5 < ma20:      bearish_score += 1
+    if rsi < 45:        bearish_score += 1
+    if momentum < -1:   bearish_score += 1
+
+    if bullish_score >= 3:
+        direction = "bullish"
+    elif bearish_score >= 3:
+        direction = "bearish"
+    else:
+        direction = "neutral"
+
+    return direction, round(rsi, 1), round(float(ma5), 2), round(float(ma20), 2)
+
+def get_beginner_strategy(signal, owns_stock, wants_100_shares, direction="neutral"):
+    """初心者モード用：5戦略から最適なものを返す"""
     if "売り" in signal:
         if owns_stock:
             return "covered_call"
         elif wants_100_shares:
             return "csp"
         else:
-            return "put_spread"
-    elif "買い" in signal:
-        return "call_buy"
+            return "otm_put_sell"
+    elif "買い" in signal or "様子見" in signal:
+        # 方向性で分岐
+        if direction == "bearish":
+            return "put_buy"
+        else:
+            return "call_buy"
     else:
-        # 様子見の場合でも提示
-        return "put_spread"
+        return "call_buy"
 
 def build_broker_steps(ticker, expiry, price, broker_is_saxo, is_beginner_mode):
     if broker_is_saxo:
@@ -361,6 +408,9 @@ def scan_ticker(ticker):
                 errors.append(f"{ticker}: データ不足"); continue
             hv = float(returns.std() * (252 ** 0.5))
 
+            # テクニカル指標
+            direction, rsi, ma5, ma20 = calc_technical_direction(hist)
+
             try: expirations = stock.options
             except Exception as e:
                 errors.append(f"{ticker}: オプション取得失敗"); time.sleep(1); continue
@@ -410,6 +460,7 @@ def scan_ticker(ticker):
                 'atm_call_premium': atm_call_premium,
                 'min_capital': min_cap, 'csp_capital': calc_csp_capital(price),
                 'capital_label': get_capital_label(min_cap),
+                'direction': direction, 'rsi': rsi, 'ma5': ma5, 'ma20': ma20,
             }
         except Exception as e:
             errors.append(f"{ticker}: {type(e).__name__}: {e}"); time.sleep(1 + attempt)
@@ -434,6 +485,11 @@ def get_yahoo_data(ticker):
             result['historical_volatility'] = returns.std() * (252 ** 0.5)
             if not result['price']:
                 result['price'] = float(hist['Close'].iloc[-1])
+            direction, rsi, ma5, ma20 = calc_technical_direction(hist)
+            result['direction'] = direction
+            result['rsi'] = rsi
+            result['ma5'] = ma5
+            result['ma20'] = ma20
 
         expirations = stock.options
         result['expirations'] = list(expirations[:8]) if expirations else []
@@ -622,10 +678,13 @@ with tab1:
             signal_class = "sell" if "売り" in top['signal'] else ("buy" if "買い" in top['signal'] else "wait")
             signal_html = f'<span class="signal-sell">{top["signal"]}</span>' if "売り" in top['signal'] else (f'<span class="signal-buy">{top["signal"]}</span>' if "買い" in top['signal'] else f'<span class="signal-wait">{top["signal"]}</span>')
             if is_beginner:
-                bkey = get_beginner_strategy(top['signal'], owns_stock, wants_100_shares)
+                top_dir = top.get('direction', 'neutral')
+                bkey = get_beginner_strategy(top['signal'], owns_stock, wants_100_shares, top_dir)
                 bstrat = BEGINNER_STRATEGIES[bkey]
                 strategy_name = f"{bstrat['emoji']} {bstrat['name']}"
-                strategy_note = f'<div style="font-size:0.82rem;color:#718096;margin-top:6px;">📌 {bstrat["desc"]}</div>'
+                dir_label = {"bullish":"📈 上昇トレンド","bearish":"📉 下落トレンド","neutral":"➡️ 方向感なし"}.get(top_dir,"")
+                rsi_val = top.get('rsi', '')
+                strategy_note = f'<div style="font-size:0.82rem;color:#555;margin-top:8px;background:#f7fafc;border-radius:8px;padding:8px 12px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>🔎 テクニカル: {dir_label}{"（RSI: "+str(rsi_val)+"）" if rsi_val else ""}</div>'
             else:
                 strategy_name, _ = get_strategy_for_capital(capital, top['price'], top['signal'])
                 strategy_note = ""
@@ -660,10 +719,13 @@ with tab1:
 
             for i, (_, row) in enumerate(show_df.iterrows()):
                 if is_beginner:
-                    bkey = get_beginner_strategy(row['signal'], owns_stock, wants_100_shares)
+                    row_dir = row.get('direction', 'neutral')
+                    bkey = get_beginner_strategy(row['signal'], owns_stock, wants_100_shares, row_dir)
                     bstrat = BEGINNER_STRATEGIES[bkey]
                     strategy_name = f"{bstrat['emoji']} {bstrat['name']}"
-                    b_note = f'<div style="font-size:0.82rem;color:#718096;margin-top:8px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>💰 必要: {bstrat["required"]}</div>'
+                    dir_label = {"bullish":"📈 上昇トレンド","bearish":"📉 下落トレンド","neutral":"➡️ 方向感なし"}.get(row_dir,"")
+                    rsi_v = row.get('rsi','')
+                    b_note = f'<div style="font-size:0.82rem;color:#555;margin-top:8px;background:#f7fafc;border-radius:8px;padding:8px 12px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>💰 必要: {bstrat["required"]}<br>🔎 テクニカル: {dir_label}{"（RSI: "+str(rsi_v)+"）" if rsi_v else ""}</div>'
                 else:
                     strategy_name, _ = get_strategy_for_capital(capital, row['price'], row['signal'])
                     b_note = ""
@@ -859,7 +921,11 @@ with tab2:
                 hv_val = ydata.get('historical_volatility')
                 c3.metric("HV（実際の変動）", f"{hv_val:.1%}" if hv_val else "---",
                          help="過去30日の実際の価格変動の大きさ")
-                st.write(f"**{ydata.get('company_name')}**　|　セクター: {ydata.get('sector')}　|　52週高値: ${ydata.get('week52_high')}　/　安値: ${ydata.get('week52_low')}　|　推奨満期日: {expiry}")
+                d = ydata.get('direction','neutral')
+                d_label = {"bullish":"📈 上昇トレンド","bearish":"📉 下落トレンド","neutral":"➡️ 方向感なし"}.get(d,"")
+                rsi_disp = ydata.get('rsi','')
+                st.write(f"**{ydata.get('company_name')}**　|　セクター: {ydata.get('sector')}　|　52週高値: ${ydata.get('week52_high')}　/　安値: ${ydata.get('week52_low')}　|　満期日: {expiry}")
+                st.info(f"🔎 テクニカル分析: **{d_label}**　RSI: **{rsi_disp}**　MA5: ${ydata.get('ma5','')}　MA20: ${ydata.get('ma20','')}")
 
         # AI分析
         st.markdown('<div class="section-title">🤖 Claude AI 作戦レポート</div>', unsafe_allow_html=True)
@@ -869,6 +935,13 @@ with tab2:
                 hv = ydata.get('historical_volatility')
                 iv_str = f"{iv:.1%}" if iv else '不明'
                 hv_str = f"{hv:.1%}" if hv else '不明'
+                # テクニカル分析
+                nav_direction = ydata.get('direction', 'neutral')
+                nav_rsi = ydata.get('rsi', '')
+                nav_ma5 = ydata.get('ma5', '')
+                nav_ma20 = ydata.get('ma20', '')
+                dir_jp = {"bullish":"上昇トレンド","bearish":"下落トレンド","neutral":"方向感なし"}.get(nav_direction,"不明")
+
                 if iv and hv:
                     if iv > hv * 1.3: iv_comment = "IVがHVより30%以上高い → 売り戦略が有利"
                     elif iv < hv * 0.8: iv_comment = "IVがHVより低い → 買い戦略が有利"
@@ -876,27 +949,37 @@ with tab2:
                 else: iv_comment = "データ不足"
                 market_data = f"""
 現在株価: ${ydata.get('price')} / 会社名: {ydata.get('company_name')}
-IV: {iv_str} / HV: {hv_str} / 判定: {iv_comment}
+IV: {iv_str} / HV: {hv_str} / IV判定: {iv_comment}
+テクニカル: {dir_jp} / RSI: {nav_rsi} / MA5: {nav_ma5} / MA20: {nav_ma20}
 推奨満期日: {ydata.get('target_expiry','不明')}
 52週高値: ${ydata.get('week52_high')} / 安値: ${ydata.get('week52_low')}
 ATM Put: {ydata.get('puts_sample','データなし')[:300]}
 """
             else:
                 market_data = f"データ取得エラー: {yerr}"
+                nav_direction = "neutral"
 
             if is_beginner2:
-                bkey2 = get_beginner_strategy("売りチャンス🔥", owns_stock2, wants_100_shares2)
+                bkey2 = get_beginner_strategy("売りチャンス🔥", owns_stock2, wants_100_shares2, nav_direction)
                 bstrat2 = BEGINNER_STRATEGIES[bkey2]
+                # 買い戦略の場合はテクニカルで分岐
+                if nav_direction == "bearish":
+                    buy_rec = "プット買い（爆益戦略その2）"
+                else:
+                    buy_rec = "コール買い（爆益戦略その1）"
                 level_inst = f"""初心者向けに書いてください。専門用語にはカッコで解説を付け、小学生でもわかる言葉で書いてください。
-推奨戦略は以下の4つの中から選んでください：
+推奨戦略は以下の5つの中から選んでください：
 1. コール売り（カバードコール）: 100株保有者向け・安定収入型
-2. プット売り（100株購入あり）: 100株買ってもよい方向け
-3. プット売り（100株購入なし・スプレッド）: 少額でできる売り戦略
-4. コール買い（爆益戦略その1）/ プット買い（爆益戦略その2）: ハイリスクハイリターン
+2. プット売り（100株購入あり・CSP）: 100株買ってもよい方向け
+3. プット売り（100株購入なし・OTM遠め）: 株価から10〜20%離れた場所を売り、プレミアムが半分になったら買い戻して利確
+4. コール買い（爆益戦略その1）: 上昇トレンド時に有効
+5. プット買い（爆益戦略その2）: 下落トレンド時に有効
 
 このユーザーの条件: {'100株保有あり' if owns_stock2 else ('100株購入OK' if wants_100_shares2 else '100株購入しない')}
+テクニカル分析結果: {dir_jp}（RSI: {nav_rsi}）
 → 売りシグナルの場合は「{bstrat2['name']}」を優先推奨してください。
-→ 買いシグナルの場合は「コール買い（爆益戦略その1）」を推奨してください。"""
+→ 買いシグナルの場合はテクニカルに基づき「{buy_rec}」を推奨してください。
+→ プット売り（OTM遠め）を推奨する場合は、株価から10〜20%下のストライクを具体的に示し、「プレミアムが50%減ったら買い戻して利確」という出口戦略も必ず記載してください。"""
             else:
                 level_inst = "上級者向けにギリシャ文字・数値を積極的に使って分析してください。"
             broker_inst = "サクソバンク証券" if is_saxo2 else "moomoo証券"
