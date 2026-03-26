@@ -55,16 +55,15 @@ def capital_input_with_currency(label, default_usd, key_prefix, rate):
     with amt_col:
         if "JPY" in currency:
             default_jpy = usd_to_jpy(default_usd, rate)
-            # 1万円単位で丸める
             default_jpy = max(10000, (default_jpy // 10000) * 10000)
-            jpy_val = st.number_input(label, value=default_jpy, step=10000,
-                                      min_value=10000, key=f"{key_prefix}_amount",
+            jpy_val = st.number_input(f"{label}（円）", value=default_jpy, step=10000,
+                                      min_value=10000, key=f"{key_prefix}_amount_jpy",
                                       format="%d")
             usd_val = jpy_to_usd(jpy_val, rate)
             st.caption(f"≈ ${usd_val:,.0f}　（1ドル＝{rate:.1f}円）")
         else:
-            usd_val = st.number_input(label, value=default_usd, step=500,
-                                      min_value=200, key=f"{key_prefix}_amount",
+            usd_val = st.number_input(f"{label}（ドル）", value=default_usd, step=500,
+                                      min_value=200, key=f"{key_prefix}_amount_usd",
                                       format="%d")
             jpy_val = usd_to_jpy(usd_val, rate)
             st.caption(f"≈ {jpy_val:,}円　（1ドル＝{rate:.1f}円）")
@@ -1455,14 +1454,16 @@ with tab3:
                 default_jpy_p = max(10000, (usd_to_jpy(saved_usd, prof_fx) // 10000) * 10000)
                 f_capital_raw = st.number_input(
                     "よく使う軍資金（円）",
-                    value=default_jpy_p, min_value=10000, step=10000, format="%d"
+                    value=default_jpy_p, min_value=10000, step=10000,
+                    format="%d", key="prof_cap_jpy"
                 )
                 f_capital = int(jpy_to_usd(f_capital_raw, prof_fx))
                 st.caption(f"≈ ${f_capital:,}　（1ドル＝{prof_fx:.1f}円）")
             else:
                 f_capital = st.number_input(
                     "よく使う軍資金（ドル）",
-                    value=saved_usd, min_value=200, step=500, format="%d"
+                    value=saved_usd, min_value=200, step=500,
+                    format="%d", key="prof_cap_usd"
                 )
                 st.caption(f"≈ {usd_to_jpy(f_capital, prof_fx):,}円　（1ドル＝{prof_fx:.1f}円）")
         with col_f7:
