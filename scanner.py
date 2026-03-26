@@ -1143,6 +1143,13 @@ with tab2:
 
         # AI分析
         st.markdown('<div class="section-title">🤖 Claude AI 作戦レポート</div>', unsafe_allow_html=True)
+        # デフォルト値（ydata が None の場合に備えて）
+        nav_direction = "neutral"
+        nav_rsi = ""
+        nav_ma5 = ""
+        nav_ma20 = ""
+        dir_jp = "方向感なし"
+        market_data = "データ取得できませんでした"
         with st.spinner("AIが最適な作戦を分析中..."):
             if ydata:
                 iv = ydata.get('iv')
