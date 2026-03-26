@@ -1380,6 +1380,19 @@ with tab3:
     </div>
     """, unsafe_allow_html=True)
 
+    # 通貨選択はフォームの外に置く（変更で即リロードさせるため）
+    prof_fx = get_fx_rate()
+    saved_cur = current_profile.get("default_capital_currency", "USD")
+    saved_usd = int(current_profile.get("default_capital", 5000))
+    st.markdown("#### デフォルト設定（通貨）")
+    f_currency = st.radio(
+        "軍資金の通貨",
+        ["USD（ドル）", "JPY（円）"],
+        index=0 if "USD" in saved_cur else 1,
+        horizontal=True,
+        key="profile_currency_sel"
+    )
+
     with st.form("profile_form"):
         st.markdown("#### 基本情報")
         col_f1, col_f2, col_f3 = st.columns(3)
@@ -1435,18 +1448,9 @@ with tab3:
             )
         )
 
-        st.markdown("#### デフォルト設定")
+        st.markdown("#### デフォルト設定（軍資金・証券会社）")
         col_f6, col_f7 = st.columns(2)
         with col_f6:
-            prof_fx = get_fx_rate()
-            saved_cur = current_profile.get("default_capital_currency", "USD")
-            saved_usd = int(current_profile.get("default_capital", 5000))
-            f_currency = st.selectbox(
-                "通貨",
-                ["USD（ドル）", "JPY（円）"],
-                index=0 if "USD" in saved_cur else 1,
-                key="profile_currency_sel"
-            )
             if "JPY" in f_currency:
                 default_jpy_p = max(10000, (usd_to_jpy(saved_usd, prof_fx) // 10000) * 10000)
                 f_capital_raw = st.number_input(
