@@ -239,6 +239,65 @@ def get_strategy_for_capital(capital, price, signal):
         else:
             return "デビットコールスプレッド", min_cap
 
+# 初心者向け4戦略マッピング
+BEGINNER_STRATEGIES = {
+    "covered_call": {
+        "name": "コール売り（カバードコール）",
+        "emoji": "📤",
+        "tag": "安定収入型",
+        "desc": "すでに100株持っている方向け。株を持ちながら権利を売って毎月コツコツ稼ぐ戦略。",
+        "risk": "株価が大きく上がると利益が限定される",
+        "required": "対象銘柄の株を100株保有していること",
+    },
+    "csp": {
+        "name": "プット売り（100株を買う権利を売る）",
+        "emoji": "💵",
+        "tag": "株を安く買いたい方向け",
+        "desc": "「この株を〇〇ドルで買います」と約束してプレミアムを受け取る戦略。株価が下がらなければそのまま利益。下がっても買いたい株ならOK。",
+        "risk": "株価が大幅下落すると100株を高値で買わされる",
+        "required": "100株分の購入資金（株価×100ドル）",
+    },
+    "put_spread": {
+        "name": "プット売り（100株購入なし・スプレッド）",
+        "emoji": "🛡️",
+        "tag": "少額でできる売り戦略",
+        "desc": "100株を買わなくてよいバージョン。2つのオプションを組み合わせてリスクを限定しながらプレミアムを受け取る。",
+        "risk": "最大損失が限定されるが、利益も限定される",
+        "required": "数百〜数千ドル（スプレッド幅×100）",
+    },
+    "call_buy": {
+        "name": "コール買い（爆益戦略 その1）",
+        "emoji": "🚀",
+        "tag": "上昇を狙う・ハイリスクハイリターン",
+        "desc": "株が上がると予想したときに、少ない資金で大きな利益を狙う戦略。当たれば数倍になることも。外れるとゼロになるリスクあり。",
+        "risk": "株が上がらなければ投資額がゼロになる",
+        "required": "数百〜数千ドル（プレミアム×100）",
+    },
+    "put_buy": {
+        "name": "プット買い（爆益戦略 その2）",
+        "emoji": "📉",
+        "tag": "下落を狙う・ハイリスクハイリターン",
+        "desc": "株が下がると予想したときに使う戦略。暴落局面では数倍〜数十倍になることも。外れるとゼロになるリスクあり。",
+        "risk": "株が下がらなければ投資額がゼロになる",
+        "required": "数百〜数千ドル（プレミアム×100）",
+    },
+}
+
+def get_beginner_strategy(signal, owns_stock, wants_100_shares):
+    """初心者モード用：4戦略から最適なものを返す"""
+    if "売り" in signal:
+        if owns_stock:
+            return "covered_call"
+        elif wants_100_shares:
+            return "csp"
+        else:
+            return "put_spread"
+    elif "買い" in signal:
+        return "call_buy"
+    else:
+        # 様子見の場合でも提示
+        return "put_spread"
+
 def build_broker_steps(ticker, expiry, price, broker_is_saxo, is_beginner_mode):
     if broker_is_saxo:
         steps = f"""
@@ -474,17 +533,49 @@ with tab1:
     if tier_label:
         st.info(f"💼 **{tier_label}** の軍資金で使える戦略のみ表示します")
 
+    # 初心者モード：戦略の追加質問
+    owns_stock = False
+    wants_100_shares = False
     if is_beginner:
-        with st.expander("📖 軍資金別 使える戦略ガイド（初心者の方はここを確認）"):
-            st.markdown("""
-            | 軍資金 | 使える戦略 | 目安銘柄 |
-            |--------|-----------|---------|
-            | $500〜$2,000 | デビットスプレッド（格安銘柄のみ） | $30以下 |
-            | $2,000〜$5,000 | デビットスプレッド・クレジットスプレッド | $200以下 |
-            | $5,000〜$15,000 | スプレッド全般・CSP（安い株のみ） | $400以下 |
-            | $15,000〜$30,000 | CSP・カバードコール・スプレッド | ほぼ全銘柄 |
-            | $30,000〜 | 全戦略（IC・CSP・CC含む） | 全銘柄 |
-            """)
+        st.markdown('<div class="section-title">📋 あなたに合った戦略を選びます</div>', unsafe_allow_html=True)
+
+        # 4戦略の説明カード
+        s = BEGINNER_STRATEGIES
+        st.markdown(f"""
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+            <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:12px;padding:16px;">
+                <div style="font-weight:700;color:#c53030;">{s['covered_call']['emoji']} {s['covered_call']['name']}</div>
+                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['covered_call']['desc']}</div>
+            </div>
+            <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:12px;padding:16px;">
+                <div style="font-weight:700;color:#c53030;">{s['csp']['emoji']} {s['csp']['name']}</div>
+                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['csp']['desc']}</div>
+            </div>
+            <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:12px;padding:16px;">
+                <div style="font-weight:700;color:#c53030;">{s['put_spread']['emoji']} {s['put_spread']['name']}</div>
+                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['put_spread']['desc']}</div>
+            </div>
+            <div style="background:#f0fff4;border:1px solid #c6f6d5;border-radius:12px;padding:16px;">
+                <div style="font-weight:700;color:#276749;">{s['call_buy']['emoji']} {s['call_buy']['name']}</div>
+                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['call_buy']['desc']}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        q1 = st.radio(
+            "対象銘柄の株を100株すでに持っていますか？",
+            ["いいえ（持っていない）", "はい（持っている）"],
+            horizontal=True, key="owns_stock"
+        )
+        owns_stock = "はい" in q1
+
+        if not owns_stock:
+            q2 = st.radio(
+                "プット売りの場合、100株を購入してもよいですか？（資金が株価×100ドル必要です）",
+                ["いいえ（100株は購入したくない / できない）", "はい（100株を購入してもよい）"],
+                horizontal=True, key="wants_100"
+            )
+            wants_100_shares = "はい" in q2
 
     st.markdown("<br>", unsafe_allow_html=True)
     scan_btn = st.button("🔍 今日のチャンス銘柄をスキャンする", type="primary", use_container_width=True)
@@ -530,7 +621,14 @@ with tab1:
             top = top_df.iloc[0]
             signal_class = "sell" if "売り" in top['signal'] else ("buy" if "買い" in top['signal'] else "wait")
             signal_html = f'<span class="signal-sell">{top["signal"]}</span>' if "売り" in top['signal'] else (f'<span class="signal-buy">{top["signal"]}</span>' if "買い" in top['signal'] else f'<span class="signal-wait">{top["signal"]}</span>')
-            strategy_name, _ = get_strategy_for_capital(capital, top['price'], top['signal'])
+            if is_beginner:
+                bkey = get_beginner_strategy(top['signal'], owns_stock, wants_100_shares)
+                bstrat = BEGINNER_STRATEGIES[bkey]
+                strategy_name = f"{bstrat['emoji']} {bstrat['name']}"
+                strategy_note = f'<div style="font-size:0.82rem;color:#718096;margin-top:6px;">📌 {bstrat["desc"]}</div>'
+            else:
+                strategy_name, _ = get_strategy_for_capital(capital, top['price'], top['signal'])
+                strategy_note = ""
             st.markdown(f"""
             <div class="chance-card {signal_class}">
                 <div class="rank-badge">🥇 本日 No.1 チャンス銘柄</div><br>
@@ -546,6 +644,7 @@ with tab1:
                     <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{top['expiry']}</strong></div>
                     <div><div style="font-size:0.75rem;color:#718096;">必要資金</div><strong style="font-size:1.1rem;">${top['min_capital']:,}〜</strong></div>
                 </div>
+                {strategy_note}
             </div>
             """, unsafe_allow_html=True)
 
@@ -560,7 +659,14 @@ with tab1:
                 show_df = df_affordable.head(top_n)
 
             for i, (_, row) in enumerate(show_df.iterrows()):
-                strategy_name, _ = get_strategy_for_capital(capital, row['price'], row['signal'])
+                if is_beginner:
+                    bkey = get_beginner_strategy(row['signal'], owns_stock, wants_100_shares)
+                    bstrat = BEGINNER_STRATEGIES[bkey]
+                    strategy_name = f"{bstrat['emoji']} {bstrat['name']}"
+                    b_note = f'<div style="font-size:0.82rem;color:#718096;margin-top:8px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>💰 必要: {bstrat["required"]}</div>'
+                else:
+                    strategy_name, _ = get_strategy_for_capital(capital, row['price'], row['signal'])
+                    b_note = ""
                 signal_class = "sell" if "売り" in row['signal'] else ("buy" if "買い" in row['signal'] else "wait")
                 signal_html = f'<span class="signal-sell">{row["signal"]}</span>' if "売り" in row['signal'] else (f'<span class="signal-buy">{row["signal"]}</span>' if "買い" in row['signal'] else f'<span class="signal-wait">{row["signal"]}</span>')
                 put_txt = f"Putプレミアム: <strong>${row['atm_put_premium']:.2f}</strong>" if row.get('atm_put_premium') else ""
@@ -581,6 +687,7 @@ with tab1:
                         {f'<div>{put_txt}</div>' if put_txt else ''}
                         {f'<div>{call_txt}</div>' if call_txt else ''}
                     </div>
+                    {b_note}
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -607,7 +714,21 @@ with tab1:
             top5 = df_affordable.head(5) if not df_affordable.empty else df.head(5)
             scan_summary = top5[['ticker','price','iv','hv','iv_hv_ratio','signal','strategy','min_capital']].to_string()
             broker_name = "サクソバンク証券" if is_saxo else "moomoo証券"
-            level_note = "初心者向けに、専門用語にはカッコで解説を付け、小学生でもわかる言葉で書いてください。" if is_beginner else "上級者向けに、専門用語・ギリシャ文字・数値を積極的に使って分析してください。"
+            if is_beginner:
+                bkey = get_beginner_strategy("売りチャンス🔥", owns_stock, wants_100_shares)
+                bstrat = BEGINNER_STRATEGIES[bkey]
+                level_note = f"""初心者向けに書いてください。専門用語にはカッコで解説を付け、小学生でもわかる言葉で書いてください。
+推奨戦略はこの4つの中から選んでください：
+1. コール売り（カバードコール）: 100株保有者向け・安定収入型
+2. プット売り（100株購入あり / CSP）: 100株買ってもよい方向け
+3. プット売り（100株購入なし / スプレッド）: 少額でできる売り戦略
+4. コール買い（爆益戦略その1）/ プット買い（爆益戦略その2）: ハイリスクハイリターン
+
+このユーザーの条件: {'100株保有あり' if owns_stock else ('100株購入OK' if wants_100_shares else '100株購入しない')}
+→ 売りシグナルの場合は「{bstrat['name']}」を優先推奨してください。
+買いシグナルの場合は「コール買い（爆益戦略その1）」を推奨してください。"""
+            else:
+                level_note = "上級者向けに、専門用語・ギリシャ文字・数値を積極的に使って分析してください。"
 
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             prompt = f"""あなたは米国株オプション取引の専門家です。
@@ -654,6 +775,25 @@ with tab2:
         with st.expander("📖 用語がわからない方はここを確認"):
             for term, desc in GLOSSARY.items():
                 st.markdown(f"**{term}**：{desc}")
+
+        st.markdown('<div class="section-title">📋 あなたに合った戦略を教えてください</div>', unsafe_allow_html=True)
+        q1_nav = st.radio(
+            "対象銘柄の株を100株すでに持っていますか？",
+            ["いいえ（持っていない）", "はい（持っている）"],
+            horizontal=True, key="owns_stock_nav"
+        )
+        owns_stock2 = "はい" in q1_nav
+        wants_100_shares2 = False
+        if not owns_stock2:
+            q2_nav = st.radio(
+                "プット売りの場合、100株を購入してもよいですか？（資金が株価×100ドル必要です）",
+                ["いいえ（100株は購入したくない / できない）", "はい（100株を購入してもよい）"],
+                horizontal=True, key="wants_100_nav"
+            )
+            wants_100_shares2 = "はい" in q2_nav
+    else:
+        owns_stock2 = False
+        wants_100_shares2 = False
 
     st.markdown('<div class="section-title">🔎 銘柄を入力して作戦を立てる</div>', unsafe_allow_html=True)
 
@@ -744,7 +884,21 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
             else:
                 market_data = f"データ取得エラー: {yerr}"
 
-            level_inst = "初心者向けに専門用語をカッコで解説し、小学5年生でもわかる言葉で書いてください。" if is_beginner2 else "上級者向けにギリシャ文字・数値を積極的に使って分析してください。"
+            if is_beginner2:
+                bkey2 = get_beginner_strategy("売りチャンス🔥", owns_stock2, wants_100_shares2)
+                bstrat2 = BEGINNER_STRATEGIES[bkey2]
+                level_inst = f"""初心者向けに書いてください。専門用語にはカッコで解説を付け、小学生でもわかる言葉で書いてください。
+推奨戦略は以下の4つの中から選んでください：
+1. コール売り（カバードコール）: 100株保有者向け・安定収入型
+2. プット売り（100株購入あり）: 100株買ってもよい方向け
+3. プット売り（100株購入なし・スプレッド）: 少額でできる売り戦略
+4. コール買い（爆益戦略その1）/ プット買い（爆益戦略その2）: ハイリスクハイリターン
+
+このユーザーの条件: {'100株保有あり' if owns_stock2 else ('100株購入OK' if wants_100_shares2 else '100株購入しない')}
+→ 売りシグナルの場合は「{bstrat2['name']}」を優先推奨してください。
+→ 買いシグナルの場合は「コール買い（爆益戦略その1）」を推奨してください。"""
+            else:
+                level_inst = "上級者向けにギリシャ文字・数値を積極的に使って分析してください。"
             broker_inst = "サクソバンク証券" if is_saxo2 else "moomoo証券"
             comp_name = ydata.get('company_name', ticker) if ydata else ticker
 
