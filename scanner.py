@@ -837,13 +837,20 @@ with tab1:
             )
             wants_100_shares = "はい" in q2
 
-        exp_window = st.select_slider(
+        exp_window = st.radio(
             "📅 満期日の目安（何日後を狙う？）",
-            options=["30日", "60日", "90日", "180日"],
-            value="60日",
+            ["30日", "60日", "90日", "180日"],
+            index=1,
+            horizontal=True,
             key="exp_window_scan"
         )
-        st.caption("短い満期日ほど動きが速くハイリスク・ハイリターン。長い満期日ほど余裕があり初心者向けです。")
+        exp_window_desc = {
+            "30日": "⚡ 短期・ハイリスクハイリターン",
+            "60日": "⚖️ バランス型（初心者におすすめ）",
+            "90日": "🌱 余裕あり・初心者向け",
+            "180日": "🐢 長期・じっくり型",
+        }
+        st.caption(f"{exp_window_desc.get(exp_window, '')}　※実際の満期日は銘柄によって前後します（スキャン後に実日付を表示）")
     else:
         exp_window = "60日"
 
@@ -905,12 +912,16 @@ with tab1:
                 if ep_data:
                     prem_val = ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
                     prem_per_contract = prem_val * 100
-                    prem_html = f'<div><div style="font-size:0.75rem;color:#718096;">{"支払う" if is_buy else "受け取る"}プレミアム（1枚）</div><strong style="font-size:1.3rem;color:{"#2b6cb0" if is_buy else "#276749"};">${prem_per_contract:,.0f}</strong><span style="font-size:0.75rem;color:#718096;">（満期{exp_window}）</span></div>'
-                    exp_show = ep_data.get('expiry', top['expiry'])
+                    actual_days = ep_data.get('days', '?')
+                    actual_expiry = ep_data.get('expiry', top['expiry'])
+                    prem_html = f'<div><div style="font-size:0.75rem;color:#718096;">{"支払う" if is_buy else "受け取る"}プレミアム（1枚）</div><strong style="font-size:1.3rem;color:{"#2b6cb0" if is_buy else "#276749"};">${prem_per_contract:,.0f}</strong></div>'
+                    exp_show = f'{actual_expiry}（{actual_days}日後）'
+                    exp_note = f'<div style="font-size:0.75rem;color:#e07b00;margin-top:2px;">📅 {exp_window}目安 → 実際は<strong>{actual_days}日後</strong>が最近似</div>'
                     strike_html = f'<div><div style="font-size:0.75rem;color:#718096;">ATMストライク</div><strong style="font-size:1.1rem;">${ep_data.get("strike",0):.1f}</strong></div>'
                 else:
                     prem_html = ""
                     exp_show = top['expiry']
+                    exp_note = ""
                     strike_html = ""
                 strategy_note = f'<div style="font-size:0.82rem;color:#555;margin-top:8px;background:#f7fafc;border-radius:8px;padding:8px 12px;">📌 {bstrat["desc"]}<br>⚠️ リスク: {bstrat["risk"]}<br>🔎 テクニカル: {dir_label}{"（RSI: "+str(rsi_val)+"）" if rsi_val else ""}</div>'
             else:
@@ -918,6 +929,7 @@ with tab1:
                 strategy_note = ""
                 prem_html = ""
                 exp_show = top['expiry']
+                exp_note = ""
                 strike_html = ""
             st.markdown(f"""
             <div class="chance-card {signal_class}">
@@ -931,7 +943,7 @@ with tab1:
                     {prem_html if is_beginner else f'<div><div style="font-size:0.75rem;color:#718096;">IV</div><strong style="font-size:1.3rem;">{top["iv"]:.1%}</strong></div><div><div style="font-size:0.75rem;color:#718096;">HV</div><strong style="font-size:1.3rem;">{top["hv"]:.1%}</strong></div>'}
                     {strike_html if is_beginner else ""}
                     <div><div style="font-size:0.75rem;color:#718096;">推奨戦略</div><strong style="font-size:1.1rem;">{strategy_name}</strong></div>
-                    <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{exp_show}</strong></div>
+                    <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{exp_show}</strong>{exp_note}</div>
                     <div><div style="font-size:0.75rem;color:#718096;">必要資金</div><strong style="font-size:1.1rem;">${top['min_capital']:,}〜</strong></div>
                 </div>
                 {strategy_note}
@@ -965,8 +977,15 @@ with tab1:
                         r_prem = r_ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
                         r_prem_contract = r_prem * 100
                         r_exp = r_ep_data.get('expiry', row['expiry'])
+                        r_days = r_ep_data.get('days', '?')
                         r_strike = r_ep_data.get('strike', 0)
-                        prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">{"支払う" if r_is_buy else "受け取る"}プレミアム（1枚）</span> <strong style="color:{"#2b6cb0" if r_is_buy else "#276749"};">${r_prem_contract:,.0f}</strong></div><div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{r_exp}</strong></div><div><span style="color:#718096;font-size:0.8rem;">ストライク</span> <strong>${r_strike:.1f}</strong></div>'
+                        prem_cols = (
+                            f'<div><span style="color:#718096;font-size:0.8rem;">{"支払う" if r_is_buy else "受け取る"}プレミアム（1枚）</span> '
+                            f'<strong style="color:{"#2b6cb0" if r_is_buy else "#276749"};">${r_prem_contract:,.0f}</strong></div>'
+                            f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{r_exp}</strong>'
+                            f'<span style="font-size:0.75rem;color:#e07b00;margin-left:4px;">{exp_window}目安→実際{r_days}日後</span></div>'
+                            f'<div><span style="color:#718096;font-size:0.8rem;">ストライク</span> <strong>${r_strike:.1f}</strong></div>'
+                        )
                     else:
                         prem_cols = f'<div><span style="color:#718096;font-size:0.8rem;">満期日</span> <strong>{row["expiry"]}</strong></div>'
                 else:
