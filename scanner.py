@@ -25,9 +25,50 @@ DEFAULT_PROFILE = {
     "risk_tolerance": "バランス重視",
     "investment_goal": "副収入を得たい",
     "default_capital": 5000,
+    "default_capital_currency": "USD",
     "broker": "サクソバンク証券",
     "setup_done": False,
 }
+
+@st.cache_data(ttl=3600)
+def get_fx_rate():
+    """USD/JPY レートを取得（失敗時は150を返す）"""
+    try:
+        fx = yf.Ticker("USDJPY=X")
+        rate = fx.fast_info.get("lastPrice") or fx.history(period="1d")['Close'].iloc[-1]
+        return float(rate)
+    except Exception:
+        return 150.0
+
+def usd_to_jpy(usd_amount, rate):
+    return int(usd_amount * rate)
+
+def jpy_to_usd(jpy_amount, rate):
+    return jpy_amount / rate
+
+def capital_input_with_currency(label, default_usd, key_prefix, rate):
+    """円/ドル切り替え対応の軍資金入力UI。戻り値は常にUSD（float）"""
+    cur_col, amt_col = st.columns([1, 3])
+    with cur_col:
+        currency = st.selectbox("通貨", ["USD（ドル）", "JPY（円）"],
+                                key=f"{key_prefix}_currency", label_visibility="collapsed")
+    with amt_col:
+        if "JPY" in currency:
+            default_jpy = usd_to_jpy(default_usd, rate)
+            # 1万円単位で丸める
+            default_jpy = max(10000, (default_jpy // 10000) * 10000)
+            jpy_val = st.number_input(label, value=default_jpy, step=10000,
+                                      min_value=10000, key=f"{key_prefix}_amount",
+                                      format="%d")
+            usd_val = jpy_to_usd(jpy_val, rate)
+            st.caption(f"≈ ${usd_val:,.0f}　（1ドル＝{rate:.1f}円）")
+        else:
+            usd_val = st.number_input(label, value=default_usd, step=500,
+                                      min_value=200, key=f"{key_prefix}_amount",
+                                      format="%d")
+            jpy_val = usd_to_jpy(usd_val, rate)
+            st.caption(f"≈ {jpy_val:,}円　（1ドル＝{rate:.1f}円）")
+    return float(usd_val), currency
 
 def get_personality_type(profile):
     """プロフィールから投資パーソナリティを判定"""
@@ -736,13 +777,17 @@ with tab1:
     is_beginner = "初心者" in mode
     is_saxo = "サクソバンク" in broker
 
-    col1, col2, col3 = st.columns(3)
+    col1, col3 = st.columns([2, 1])
     with col1:
         universe = st.selectbox("対象ユニバース", ["QQQ上位30銘柄", "S&P500代表30銘柄"])
-    with col2:
-        capital = st.number_input("💰 軍資金（ドル）", value=5000, step=1000, min_value=500, key="scan_capital")
     with col3:
         top_n = st.number_input("表示する上位銘柄数", value=5, min_value=3, max_value=10)
+
+    fx_rate = get_fx_rate()
+    scan_default_usd = int(st.session_state.profile.get("default_capital", 5000))
+    st.markdown("**💰 軍資金**")
+    capital, scan_currency = capital_input_with_currency("軍資金", scan_default_usd, "scan_capital", fx_rate)
+    capital = int(capital)
 
     # 軍資金ガイド
     tier_label = next((n for n, t in CAPITAL_TIERS.items() if t["min"] <= capital < t["max"]), "")
@@ -1086,7 +1131,11 @@ with tab2:
         "企業名またはティッカーシンボルを入力",
         placeholder="例：テスラ、アップル、NVDA、META、エヌビディア..."
     )
-    capital2 = st.number_input("💰 軍資金（ドル）", value=5000, step=1000, min_value=500, key="nav_capital")
+    fx_rate2 = get_fx_rate()
+    nav_default_usd = int(st.session_state.profile.get("default_capital", 5000))
+    st.markdown("**💰 軍資金**")
+    capital2_raw, nav_currency = capital_input_with_currency("軍資金", nav_default_usd, "nav_capital", fx_rate2)
+    capital2 = int(capital2_raw)
     go = st.button("今日の作戦を見る 🚀", type="primary", use_container_width=True)
 
     if not go:
@@ -1297,13 +1346,21 @@ with tab3:
         </div>
         """, unsafe_allow_html=True)
 
-        col_info1, col_info2, col_info3 = st.columns(3)
+        col_info1, col_info2, col_info3, col_info4 = st.columns(4)
         with col_info1:
             st.info(f"👤 {current_profile.get('name','未設定') or '未設定'}")
         with col_info2:
             st.info(f"🎂 {current_profile.get('age_group','')}")
         with col_info3:
             st.info(f"💼 経験 {current_profile.get('experience','')}")
+        with col_info4:
+            _cap_usd = current_profile.get("default_capital", 5000)
+            _cap_cur = current_profile.get("default_capital_currency", "USD")
+            _fx_disp = get_fx_rate()
+            if _cap_cur == "JPY":
+                st.info(f"💰 {usd_to_jpy(_cap_usd, _fx_disp):,}円 (≈${_cap_usd:,})")
+            else:
+                st.info(f"💰 ${_cap_usd:,} (≈{usd_to_jpy(_cap_usd, _fx_disp):,}円)")
 
         col_inf2a, col_inf2b = st.columns(2)
         with col_inf2a:
@@ -1381,11 +1438,29 @@ with tab3:
         st.markdown("#### デフォルト設定")
         col_f6, col_f7 = st.columns(2)
         with col_f6:
-            f_capital = st.number_input(
-                "よく使う軍資金（ドル）",
-                value=int(current_profile.get("default_capital", 5000)),
-                min_value=200, step=500
+            prof_fx = get_fx_rate()
+            saved_cur = current_profile.get("default_capital_currency", "USD")
+            saved_usd = int(current_profile.get("default_capital", 5000))
+            f_currency = st.selectbox(
+                "通貨",
+                ["USD（ドル）", "JPY（円）"],
+                index=0 if "USD" in saved_cur else 1,
+                key="profile_currency_sel"
             )
+            if "JPY" in f_currency:
+                default_jpy_p = max(10000, (usd_to_jpy(saved_usd, prof_fx) // 10000) * 10000)
+                f_capital_raw = st.number_input(
+                    "よく使う軍資金（円）",
+                    value=default_jpy_p, min_value=10000, step=10000, format="%d"
+                )
+                f_capital = int(jpy_to_usd(f_capital_raw, prof_fx))
+                st.caption(f"≈ ${f_capital:,}　（1ドル＝{prof_fx:.1f}円）")
+            else:
+                f_capital = st.number_input(
+                    "よく使う軍資金（ドル）",
+                    value=saved_usd, min_value=200, step=500, format="%d"
+                )
+                st.caption(f"≈ {usd_to_jpy(f_capital, prof_fx):,}円　（1ドル＝{prof_fx:.1f}円）")
         with col_f7:
             f_broker = st.selectbox(
                 "証券会社",
@@ -1427,6 +1502,7 @@ with tab3:
             "risk_tolerance": risk_map.get(f_risk, "バランス重視"),
             "investment_goal": goal_map.get(f_goal, "副収入を得たい"),
             "default_capital": int(f_capital),
+            "default_capital_currency": "JPY" if "JPY" in f_currency else "USD",
             "broker": f_broker,
             "setup_done": True,
         }
