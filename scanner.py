@@ -608,8 +608,8 @@ with tab1:
                 <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['csp']['desc']}</div>
             </div>
             <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:12px;padding:16px;">
-                <div style="font-weight:700;color:#c53030;">{s['put_spread']['emoji']} {s['put_spread']['name']}</div>
-                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['put_spread']['desc']}</div>
+                <div style="font-weight:700;color:#c53030;">{s['otm_put_sell']['emoji']} {s['otm_put_sell']['name']}</div>
+                <div style="font-size:0.8rem;color:#718096;margin-top:4px;">{s['otm_put_sell']['desc']}</div>
             </div>
             <div style="background:#f0fff4;border:1px solid #c6f6d5;border-radius:12px;padding:16px;">
                 <div style="font-weight:700;color:#276749;">{s['call_buy']['emoji']} {s['call_buy']['name']}</div>
