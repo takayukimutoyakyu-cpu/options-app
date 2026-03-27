@@ -4,3 +4,5 @@ anthropic
 pandas
 numpy
 streamlit-local-storage
+requests
+lxml

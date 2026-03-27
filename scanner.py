@@ -7,6 +7,9 @@ import time
 import os
 import numpy as np
 import json
+import textwrap
+import requests
+from io import StringIO
 
 try:
     from streamlit_local_storage import LocalStorage
@@ -140,6 +143,71 @@ SP500_TOP30 = [
     "KO", "BAC", "WMT", "LLY", "COST",
     "TMO", "MCD", "CRM", "ACN", "ORCL"
 ]
+
+
+def _fetch_wiki_html(url: str) -> str:
+    """WikipediaからHTMLを取得（User-Agent付き）"""
+    resp = requests.get(url, headers={"User-Agent": "OptionsAINavi/1.0"}, timeout=15)
+    resp.raise_for_status()
+    return resp.text
+
+
+@st.cache_data(ttl=86400)
+def get_sp500_tickers():
+    """WikipediaからS&P500銘柄を取得。失敗時はSP500_TOP30を返す。"""
+    try:
+        html = _fetch_wiki_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        tables = pd.read_html(StringIO(html))
+        df = tables[0]
+        tickers = df["Symbol"].tolist()
+        tickers = [t.replace(".", "-") for t in tickers]
+        return tickers
+    except Exception:
+        return SP500_TOP30
+
+
+@st.cache_data(ttl=86400)
+def get_nasdaq100_tickers():
+    """WikipediaからNasdaq 100銘柄を取得。失敗時はQQQ_TOP30を返す。"""
+    try:
+        html = _fetch_wiki_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+        tables = pd.read_html(StringIO(html))
+        df = None
+        for t in tables:
+            cols = [str(c).strip() for c in t.columns]
+            if any(c in ("Ticker", "Symbol") for c in cols):
+                df = t
+                break
+        if df is None:
+            return QQQ_TOP30
+        col = "Ticker" if "Ticker" in df.columns else "Symbol"
+        tickers = df[col].tolist()
+        tickers = [str(t).replace(".", "-") for t in tickers]
+        return tickers
+    except Exception:
+        return QQQ_TOP30
+
+
+def get_scan_universe(scan_mode: str) -> list:
+    """スキャンモードに応じた銘柄リストを返す（重複排除）。"""
+    sp500 = get_sp500_tickers()
+    ndq100 = get_nasdaq100_tickers()
+
+    if "クイック" in scan_mode:
+        combined = ndq100[:15] + sp500[:15]
+    elif "スタンダード" in scan_mode:
+        combined = ndq100[:30] + sp500[:30]
+    else:  # フルスキャン
+        combined = ndq100 + sp500[:100]
+
+    seen = set()
+    result = []
+    for t in combined:
+        if t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
+
 
 CAPITAL_TIERS = {
     "超少額（$500〜$2,000）": {"min": 500, "max": 2000},
@@ -732,7 +800,7 @@ with c1:
     <div class="feature-card">
         <div class="icon">🔍</div>
         <h3>チャンス銘柄スキャナー</h3>
-        <p>QQQ・S&P500の30銘柄を一括スキャン。<br>今日のチャンス銘柄を自動で発見します。</p>
+        <p>Nasdaq100・S&P500から最大140銘柄をスキャン。<br>今日のチャンス銘柄を自動で発見します。</p>
     </div>
     """, unsafe_allow_html=True)
 with c2:
@@ -817,11 +885,20 @@ with tab1:
     is_beginner = "初心者" in mode
     is_saxo = "サクソバンク" in broker
 
-    col1, col3 = st.columns([2, 1])
-    with col1:
-        universe = st.selectbox("対象ユニバース", ["QQQ上位30銘柄", "S&P500代表30銘柄"])
-    with col3:
-        top_n = st.number_input("表示する上位銘柄数", value=5, min_value=3, max_value=10)
+    scan_mode = st.radio(
+        "スキャン範囲",
+        ["⚡ クイックスキャン", "📊 スタンダード", "🔍 フルスキャン"],
+        horizontal=True,
+        key="scan_universe_mode"
+    )
+    scan_mode_info = {
+        "⚡ クイックスキャン": ("約30銘柄", "30秒〜1分", "主要銘柄をサッとチェック。毎日の日課に最適"),
+        "📊 スタンダード":     ("約50銘柄", "1〜2分",   "主要銘柄を幅広くカバー。バランス重視"),
+        "🔍 フルスキャン":     ("約150〜180銘柄", "5〜8分",  "Nasdaq100 + S&P500上位100を完全網羅"),
+    }
+    count, time_est, desc = scan_mode_info[scan_mode]
+    st.caption(f"📋 {count} ｜ ⏱ {time_est} ｜ {desc}")
+    top_n = st.number_input("表示する上位銘柄数", value=5, min_value=3, max_value=10)
 
     fx_rate = get_fx_rate()
     scan_default_usd = int(st.session_state.profile.get("default_capital", 5000))
@@ -899,7 +976,7 @@ with tab1:
     scan_btn = st.button("🔍 今日のチャンス銘柄をスキャンする", type="primary", use_container_width=True)
 
     if scan_btn:
-        tickers = QQQ_TOP30 if "QQQ" in universe else SP500_TOP30
+        tickers = get_scan_universe(scan_mode)
         st.markdown('<div class="section-title">📡 スキャン中...</div>', unsafe_allow_html=True)
         progress = st.progress(0)
         status = st.empty()
@@ -1037,7 +1114,7 @@ with tab1:
                 signal_html = f'<span class="signal-sell">{row["signal"]}</span>' if "売り" in row['signal'] else (f'<span class="signal-buy">{row["signal"]}</span>' if "買い" in row['signal'] else f'<span class="signal-wait">{row["signal"]}</span>')
                 iv_hv_cols = "" if is_beginner else f'<div><span style="color:#718096;font-size:0.8rem;">IV</span> <strong>{row["iv"]:.1%}</strong></div><div><span style="color:#718096;font-size:0.8rem;">HV</span> <strong>{row["hv"]:.1%}</strong></div>'
 
-                st.markdown(f"""
+                st.markdown(textwrap.dedent(f"""
                 <div class="chance-card {signal_class}">
                     <strong style="font-size:1.1rem;">{i+2}位　{row['ticker']}</strong>
                     <span style="color:#718096; font-size:0.9rem; margin-left:8px;">{row['name']}</span>
@@ -1051,7 +1128,7 @@ with tab1:
                     </div>
                     {b_note}
                 </div>
-                """, unsafe_allow_html=True)
+                """), unsafe_allow_html=True)
 
         # ========== 全銘柄表 ==========
         with st.expander("📋 全銘柄スキャン結果を見る"):
@@ -1114,7 +1191,7 @@ with tab1:
                 st.stop()
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             prompt = f"""あなたは米国株オプション取引の専門家です。
-{universe}のスキャン結果を基に分析してください。
+{scan_mode}のスキャン結果を基に分析してください。
 軍資金: ${capital:,} / 証券会社: {broker_name} / 日付: {datetime.now().strftime('%Y年%m月%d日')}
 {profile_note}
 {level_note}
