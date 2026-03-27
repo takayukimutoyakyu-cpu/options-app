@@ -1049,24 +1049,27 @@ with tab1:
                 exp_show = top['expiry']
                 exp_note = ""
                 strike_html = ""
-            st.markdown(f"""
-            <div class="chance-card {signal_class}">
-                <div class="rank-badge">🥇 本日 No.1 チャンス銘柄</div><br>
-                <strong style="font-size:1.5rem;">{top['ticker']}</strong>
-                <span style="color:#718096; margin-left:8px;">{top['name']}</span>
-                &nbsp;&nbsp;{signal_html}
-                <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;">
-                <div style="display:flex;gap:32px;flex-wrap:wrap;">
-                    <div><div style="font-size:0.75rem;color:#718096;">株価</div><strong style="font-size:1.3rem;">${top['price']:.2f}</strong></div>
-                    {prem_html if is_beginner else f'<div><div style="font-size:0.75rem;color:#718096;">IV</div><strong style="font-size:1.3rem;">{top["iv"]:.1%}</strong></div><div><div style="font-size:0.75rem;color:#718096;">HV</div><strong style="font-size:1.3rem;">{top["hv"]:.1%}</strong></div>'}
-                    {strike_html if is_beginner else ""}
-                    <div><div style="font-size:0.75rem;color:#718096;">推奨戦略</div><strong style="font-size:1.1rem;">{strategy_name}</strong></div>
-                    <div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{exp_show}</strong>{exp_note}</div>
-                    <div><div style="font-size:0.75rem;color:#718096;">必要資金</div><strong style="font-size:1.1rem;">${top['min_capital']:,}〜</strong></div>
-                </div>
-                {strategy_note}
-            </div>
-            """, unsafe_allow_html=True)
+            iv_hv_or_prem = prem_html if is_beginner else f'<div><div style="font-size:0.75rem;color:#718096;">IV</div><strong style="font-size:1.3rem;">{top["iv"]:.1%}</strong></div><div><div style="font-size:0.75rem;color:#718096;">HV</div><strong style="font-size:1.3rem;">{top["hv"]:.1%}</strong></div>'
+            strike_or_empty = strike_html if is_beginner else ""
+            card1_html = (
+                f'<div class="chance-card {signal_class}">'
+                f'<div class="rank-badge">🥇 本日 No.1 チャンス銘柄</div><br>'
+                f'<strong style="font-size:1.5rem;">{top["ticker"]}</strong>'
+                f'<span style="color:#718096; margin-left:8px;">{top["name"]}</span>'
+                f'&nbsp;&nbsp;{signal_html}'
+                f'<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;">'
+                f'<div style="display:flex;gap:32px;flex-wrap:wrap;">'
+                f'<div><div style="font-size:0.75rem;color:#718096;">株価</div><strong style="font-size:1.3rem;">${top["price"]:.2f}</strong></div>'
+                f'{iv_hv_or_prem}'
+                f'{strike_or_empty}'
+                f'<div><div style="font-size:0.75rem;color:#718096;">推奨戦略</div><strong style="font-size:1.1rem;">{strategy_name}</strong></div>'
+                f'<div><div style="font-size:0.75rem;color:#718096;">満期日</div><strong style="font-size:1.1rem;">{exp_show}</strong>{exp_note}</div>'
+                f'<div><div style="font-size:0.75rem;color:#718096;">必要資金</div><strong style="font-size:1.1rem;">${top["min_capital"]:,}〜</strong></div>'
+                f'</div>'
+                f'{strategy_note}'
+                f'</div>'
+            )
+            st.markdown(card1_html, unsafe_allow_html=True)
 
         # ========== チャンス銘柄一覧 ==========
         st.markdown(f'<div class="section-title">💰 軍資金 ${capital:,} で入れる銘柄 TOP{top_n}</div>', unsafe_allow_html=True)
@@ -1114,21 +1117,22 @@ with tab1:
                 signal_html = f'<span class="signal-sell">{row["signal"]}</span>' if "売り" in row['signal'] else (f'<span class="signal-buy">{row["signal"]}</span>' if "買い" in row['signal'] else f'<span class="signal-wait">{row["signal"]}</span>')
                 iv_hv_cols = "" if is_beginner else f'<div><span style="color:#718096;font-size:0.8rem;">IV</span> <strong>{row["iv"]:.1%}</strong></div><div><span style="color:#718096;font-size:0.8rem;">HV</span> <strong>{row["hv"]:.1%}</strong></div>'
 
-                st.markdown(textwrap.dedent(f"""
-                <div class="chance-card {signal_class}">
-                    <strong style="font-size:1.1rem;">{i+2}位　{row['ticker']}</strong>
-                    <span style="color:#718096; font-size:0.9rem; margin-left:8px;">{row['name']}</span>
-                    &nbsp;&nbsp;{signal_html}
-                    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px;">
-                        <div><span style="color:#718096;font-size:0.8rem;">株価</span> <strong>${row['price']:.2f}</strong></div>
-                        {iv_hv_cols}
-                        <div><span style="color:#718096;font-size:0.8rem;">戦略</span> <strong>{strategy_name}</strong></div>
-                        {prem_cols}
-                        <div><span style="color:#718096;font-size:0.8rem;">必要資金</span> <strong>${row['min_capital']:,}〜</strong></div>
-                    </div>
-                    {b_note}
-                </div>
-                """), unsafe_allow_html=True)
+                card_html = (
+                    f'<div class="chance-card {signal_class}">'
+                    f'<strong style="font-size:1.1rem;">{i+2}位　{row["ticker"]}</strong>'
+                    f'<span style="color:#718096; font-size:0.9rem; margin-left:8px;">{row["name"]}</span>'
+                    f'&nbsp;&nbsp;{signal_html}'
+                    f'<div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px;">'
+                    f'<div><span style="color:#718096;font-size:0.8rem;">株価</span> <strong>${row["price"]:.2f}</strong></div>'
+                    f'{iv_hv_cols}'
+                    f'<div><span style="color:#718096;font-size:0.8rem;">戦略</span> <strong>{strategy_name}</strong></div>'
+                    f'{prem_cols}'
+                    f'<div><span style="color:#718096;font-size:0.8rem;">必要資金</span> <strong>${row["min_capital"]:,}〜</strong></div>'
+                    f'</div>'
+                    f'{b_note}'
+                    f'</div>'
+                )
+                st.markdown(card_html, unsafe_allow_html=True)
 
         # ========== 全銘柄表 ==========
         with st.expander("📋 全銘柄スキャン結果を見る"):
