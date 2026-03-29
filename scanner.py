@@ -63,7 +63,7 @@ def capital_input_with_currency(label, default_usd, key_prefix, rate):
                                       min_value=10000, key=f"{key_prefix}_amount_jpy",
                                       format="%d")
             usd_val = jpy_to_usd(jpy_val, rate)
-            st.caption(f"≈ ${usd_val:,.0f}　（1ドル＝{rate:.1f}円）")
+            st.caption(f"💴 {jpy_val:,}円　≈ ${usd_val:,.0f}　（1ドル＝{rate:.1f}円）")
         else:
             usd_val = st.number_input(f"{label}（ドル）", value=default_usd, step=500,
                                       min_value=200, key=f"{key_prefix}_amount_usd",
@@ -235,8 +235,6 @@ GLOSSARY = {
     "IV（インプライドボラティリティ）": "オプションの値段に織り込まれた『将来の価格変動予測』。高いほどオプションが割高。",
     "HV（ヒストリカルボラティリティ）": "過去30日の実際の株価変動の大きさ。IVと比較して割安・割高を判断する基準。",
     "CSP（キャッシュセキュアードプット）": "『この株を〇〇ドルで買う権利を売る』戦略。株価が下がらなければプレミアムがそのまま利益になる。",
-    "デビットスプレッド": "2つのオプションを組み合わせて、少ない資金で方向性に賭ける戦略。最大損失が決まっているので安心。",
-    "クレジットスプレッド": "2つのオプションを売買してプレミアムを受け取る戦略。相場がある程度動かなければ利益になる。",
     "プレミアム": "オプションの値段のこと。売り戦略では受け取り、買い戦略では支払う。",
     "ストライク価格": "オプションで決めた『約束の株価』。例：$380のストライク＝株価が$380になった時に権利が発生。",
     "満期日": "オプションの有効期限。この日までに株価がどう動くかで損益が決まる。",
@@ -461,15 +459,10 @@ def get_strategy_for_capital(capital, price, signal):
     if "売り" in signal:
         if capital >= csp_cap and price < 100:
             return "CSP（現金確保プット）", csp_cap
-        elif capital >= min_cap * 2:
-            return "クレジットプットスプレッド", min_cap
         else:
-            return "クレジットプットスプレッド（狭め）", min_cap
+            return "プット売り（OTM遠め）", min_cap
     else:
-        if capital >= min_cap * 3:
-            return "デビットコールスプレッド（余裕あり）", min_cap
-        else:
-            return "デビットコールスプレッド", min_cap
+        return "コール買い / プット買い", min_cap
 
 # 初心者向け5戦略マッピング
 BEGINNER_STRATEGIES = {
@@ -671,12 +664,25 @@ def scan_ticker(ticker):
                                 oc.puts['distance']  = abs(oc.puts['strike']  - price)
                                 c_atm = oc.calls.nsmallest(1,'distance').iloc[0]
                                 p_atm = oc.puts.nsmallest(1,'distance').iloc[0]
+                                # OTM遠め用：株価の80〜90%のストライクを探す
+                                otm_target = price * 0.85
+                                oc.puts['otm_distance'] = abs(oc.puts['strike'] - otm_target)
+                                otm_candidates = oc.puts[oc.puts['strike'] < price * 0.92]
+                                if not otm_candidates.empty:
+                                    otm_put = otm_candidates.nsmallest(1, 'otm_distance').iloc[0]
+                                    otm_strike = float(otm_put['strike'])
+                                    otm_premium = float(otm_put['lastPrice'])
+                                else:
+                                    otm_strike = None
+                                    otm_premium = None
                                 expiry_premiums[label] = {
                                     'expiry': exp,
                                     'days': days,
                                     'call_premium': float(c_atm['lastPrice']),
                                     'put_premium':  float(p_atm['lastPrice']),
                                     'strike':       float(c_atm['strike']),
+                                    'otm_put_strike':   otm_strike,
+                                    'otm_put_premium':  otm_premium,
                                 }
                         except Exception:
                             pass
@@ -697,11 +703,11 @@ def scan_ticker(ticker):
 
             iv_hv_ratio = iv / hv if hv > 0 else 1.0
             if iv_hv_ratio > 1.3 and iv > 0.25:
-                signal = "売りチャンス🔥"; strategy = "CSP or クレジットスプレッド"; score = iv_hv_ratio * iv * 100
+                signal = "売りチャンス🔥"; strategy = "プット売り（プレミアム受取）"; score = iv_hv_ratio * iv * 100
             elif iv_hv_ratio < 0.8 and hv > 0.25:
-                signal = "買いチャンス💡"; strategy = "デビットスプレッド"; score = (1 / iv_hv_ratio) * hv * 100
+                signal = "買いチャンス💡"; strategy = "コール買い / プット買い"; score = (1 / iv_hv_ratio) * hv * 100
             elif iv > 0.35:
-                signal = "売りチャンス🔥"; strategy = "アイアンコンドル"; score = iv * 80
+                signal = "売りチャンス🔥"; strategy = "プット売り（高IV活用）"; score = iv * 80
             else:
                 signal = "様子見👀"; strategy = "エントリー見送り"; score = 10
 
@@ -822,39 +828,6 @@ with c3:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ========== よくある質問（FAQ） ==========
-st.markdown("""
-<div style="background:#f7fafc;border-radius:16px;padding:28px 32px;margin-bottom:24px;">
-    <div style="font-size:1.15rem;font-weight:700;color:#2d3748;margin-bottom:20px;">❓ 初心者がよく聞く質問</div>
-    <div class="faq-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
-        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
-            <div style="font-weight:700;color:#2b6cb0;margin-bottom:8px;">💰 いくら必要ですか？</div>
-            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
-                <strong>コール/プット買い</strong>なら <strong style="color:#2b6cb0;">$200〜$500</strong> から始められます（プレミアム代のみ）。<br><br>
-                <strong>プット売り（CSP）</strong>は株価×100株分の担保が必要なので、例えばAPPLなら約 <strong style="color:#e53e3e;">$18,000〜</strong>。<br><br>
-                まずは <strong>コール/プット買いで小額からスタート</strong> するのが初心者向けです。
-            </div>
-        </div>
-        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
-            <div style="font-weight:700;color:#276749;margin-bottom:8px;">🌱 少額でもできますか？</div>
-            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
-                <strong>はい、できます！</strong><br><br>
-                <strong style="color:#276749;">$200〜$500</strong> あれば「コール買い」「プット買い」が可能です。<br><br>
-                安い株（例：インテルなど）のオプションなら <strong>$50〜$100</strong> 程度のプレミアムもあります。下のスキャナーで実際の金額を確認してください。
-            </div>
-        </div>
-        <div style="background:#ffffff;border-radius:12px;padding:18px 20px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
-            <div style="font-weight:700;color:#744210;margin-bottom:8px;">📚 株をやったことなくても大丈夫？</div>
-            <div style="font-size:0.88rem;color:#4a5568;line-height:1.7;">
-                <strong>大丈夫です！</strong><br><br>
-                このアプリの <strong>🔰 初心者モード</strong> を使えば、AIが「どの銘柄を・どんな戦略で・いくらで入るか」を具体的に提案します。<br><br>
-                まずは <strong>少額のコール/プット買い</strong> から体験してみましょう。
-            </div>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
 # ========== プロフィールバナー（設定済みの場合のみ表示） ==========
 if profile.get("setup_done"):
     p_label, p_color, p_bg = PERSONALITY_LABELS[personality]
@@ -869,7 +842,7 @@ if profile.get("setup_done"):
     """, unsafe_allow_html=True)
 
 # ========== タブ ==========
-tab1, tab2, tab3 = st.tabs(["　🔍 チャンス銘柄スキャナー　", "　📊 作戦ナビ（個別銘柄）　", "　👤 マイプロフィール　"])
+tab1, tab2, tab3, tab4 = st.tabs(["　🔍 チャンス銘柄スキャナー　", "　📊 作戦ナビ（個別銘柄）　", "　👤 マイプロフィール　", "　❓ Q&A　"])
 
 # ==================== TAB 1: スキャナー ====================
 with tab1:
@@ -1028,14 +1001,22 @@ with tab1:
                 ep_data = ep.get(exp_window, {})
                 is_buy = bkey in ("call_buy", "put_buy")
                 if ep_data:
-                    prem_val = ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                    # OTM遠め戦略の場合はOTMストライク・プレミアムを使う
+                    if bkey == "otm_put_sell" and ep_data.get('otm_put_strike'):
+                        prem_val = ep_data.get('otm_put_premium', 0) or 0
+                        display_strike = ep_data.get('otm_put_strike', 0)
+                        strike_label = "OTMストライク"
+                    else:
+                        prem_val = ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                        display_strike = ep_data.get('strike', 0)
+                        strike_label = "ATMストライク"
                     prem_per_contract = prem_val * 100
                     actual_days = ep_data.get('days', '?')
                     actual_expiry = ep_data.get('expiry', top['expiry'])
                     prem_html = f'<div><div style="font-size:0.75rem;color:#718096;">{"支払う" if is_buy else "受け取る"}プレミアム（1枚）</div><strong style="font-size:1.3rem;color:{"#2b6cb0" if is_buy else "#276749"};">${prem_per_contract:,.0f}</strong></div>'
                     exp_show = f'{actual_expiry}（{actual_days}日後）'
                     exp_note = f'<div style="font-size:0.75rem;color:#e07b00;margin-top:2px;">📅 {exp_window}目安 → 実際は<strong>{actual_days}日後</strong>が最近似</div>'
-                    strike_html = f'<div><div style="font-size:0.75rem;color:#718096;">ATMストライク</div><strong style="font-size:1.1rem;">${ep_data.get("strike",0):.1f}</strong></div>'
+                    strike_html = f'<div><div style="font-size:0.75rem;color:#718096;">{strike_label}</div><strong style="font-size:1.1rem;">${display_strike:.1f}</strong></div>'
                 else:
                     prem_html = ""
                     exp_show = top['expiry']
@@ -1095,11 +1076,16 @@ with tab1:
                     r_ep_data = r_ep.get(exp_window, {}) if isinstance(r_ep, dict) else {}
                     r_is_buy = bkey in ("call_buy", "put_buy")
                     if r_ep_data:
-                        r_prem = r_ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                        # OTM遠め戦略の場合はOTMストライク・プレミアムを使う
+                        if bkey == "otm_put_sell" and r_ep_data.get('otm_put_strike'):
+                            r_prem = r_ep_data.get('otm_put_premium', 0) or 0
+                            r_strike = r_ep_data.get('otm_put_strike', 0)
+                        else:
+                            r_prem = r_ep_data.get('call_premium' if bkey in ('covered_call','call_buy') else 'put_premium', 0)
+                            r_strike = r_ep_data.get('strike', 0)
                         r_prem_contract = r_prem * 100
                         r_exp = r_ep_data.get('expiry', row['expiry'])
                         r_days = r_ep_data.get('days', '?')
-                        r_strike = r_ep_data.get('strike', 0)
                         r_pay_text = "支払う" if r_is_buy else "受け取る"
                         r_prem_color = "#2b6cb0" if r_is_buy else "#276749"
                         r_expiry_note = f"{exp_window}目安 実際{r_days}日後"
@@ -1178,15 +1164,19 @@ with tab1:
                 bkey = get_beginner_strategy("売りチャンス🔥", owns_stock, wants_100_shares)
                 bstrat = BEGINNER_STRATEGIES[bkey]
                 level_note = f"""初心者向けに書いてください。専門用語にはカッコで解説を付け、小学生でもわかる言葉で書いてください。
-推奨戦略はこの4つの中から選んでください：
+推奨戦略はこの5つの中から選んでください：
 1. コール売り（カバードコール）: 100株保有者向け・安定収入型
-2. プット売り（100株購入あり / CSP）: 100株買ってもよい方向け
-3. プット売り（100株購入なし / スプレッド）: 少額でできる売り戦略
-4. コール買い（爆益戦略その1）/ プット買い（爆益戦略その2）: ハイリスクハイリターン
+2. プット売り（100株購入あり・CSP）: 100株買ってもよい方向け
+3. プット売り（100株購入なし・OTM遠め）: 株価から10〜20%離れた場所を売り、プレミアムが半分になったら買い戻して利確
+4. コール買い（爆益戦略その1）: 上昇トレンド時に有効
+5. プット買い（爆益戦略その2）: 下落トレンド時に有効
 
 このユーザーの条件: {'100株保有あり' if owns_stock else ('100株購入OK' if wants_100_shares else '100株購入しない')}
 → 売りシグナルの場合は「{bstrat['name']}」を優先推奨してください。
-買いシグナルの場合は「コール買い（爆益戦略その1）」を推奨してください。"""
+買いシグナルの場合は「コール買い（爆益戦略その1）」を推奨してください。
+→ プット売り（OTM遠め）を推奨する場合は、ストライク価格は必ず現在株価×0.80〜0.90の範囲で指定してください。現在株価より高い（ITM）ストライクは絶対に推奨しないでください。
+
+【重要】スプレッド戦略（クレジットスプレッド、デビットスプレッド、ブルプット、ベアプット、アイアンコンドル等）は絶対に推奨しないでください。このユーザーは単体戦略のみを学んでいます。必ず上記5つの単体戦略の中から推奨してください。"""
             else:
                 level_note = "上級者向けに、専門用語・ギリシャ文字・数値を積極的に使って分析してください。"
 
@@ -1404,7 +1394,9 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
 テクニカル分析結果: {dir_jp}（RSI: {nav_rsi}）
 → 売りシグナルの場合は「{bstrat2['name']}」を優先推奨してください。
 → 買いシグナルの場合はテクニカルに基づき「{buy_rec}」を推奨してください。
-→ プット売り（OTM遠め）を推奨する場合は、株価から10〜20%下のストライクを具体的に示し、「プレミアムが50%減ったら買い戻して利確」という出口戦略も必ず記載してください。"""
+→ プット売り（OTM遠め）を推奨する場合は、株価から10〜20%下のストライクを具体的に示し、「プレミアムが50%減ったら買い戻して利確」という出口戦略も必ず記載してください。
+
+【重要】スプレッド戦略（クレジットスプレッド、デビットスプレッド、ブルプット、ベアプット、アイアンコンドル等）は絶対に推奨しないでください。このユーザーは単体戦略のみを学んでいます。必ず上記5つの単体戦略の中から推奨してください。"""
             else:
                 level_inst = "上級者向けにギリシャ文字・数値を積極的に使って分析してください。"
             broker_inst = "サクソバンク証券" if is_saxo2 else "moomoo証券"
@@ -1624,7 +1616,7 @@ with tab3:
                     format="%d", key="prof_cap_jpy"
                 )
                 f_capital = int(jpy_to_usd(f_capital_raw, prof_fx))
-                st.caption(f"≈ ${f_capital:,}　（1ドル＝{prof_fx:.1f}円）")
+                st.caption(f"💴 {f_capital_raw:,}円　≈ ${f_capital:,}　（1ドル＝{prof_fx:.1f}円）")
             else:
                 f_capital = st.number_input(
                     "よく使う軍資金（ドル）",
@@ -1705,3 +1697,146 @@ with tab3:
                 st.session_state.profile = dict(DEFAULT_PROFILE)
                 st.success("プロフィールを削除しました。")
                 st.rerun()
+
+# ==================== TAB 4: Q&A ====================
+with tab4:
+    st.markdown('<div class="section-title">❓ よくある質問（Q&A）</div>', unsafe_allow_html=True)
+
+    # --- 資金に関する質問 ---
+    st.markdown("### 💰 資金について")
+
+    with st.expander("いくらあれば始められますか？"):
+        st.markdown("""
+**コール買い・プット買い**なら **$200〜$500（約3万〜7.5万円）** から始められます。支払うのはプレミアム代のみです。
+
+**プット売り（CSP）** は株価×100株分の担保が必要です。例えばAAPLなら約 **$18,000〜（約270万円〜）**。
+
+**プット売り（OTM遠め）** は証拠金制度を利用するため、数千ドル程度の証拠金で取引できます（ブローカーにより異なります）。
+
+> まずは **コール買い・プット買いで少額からスタート** するのが初心者向けです。
+""")
+
+    with st.expander("少額でもできますか？"):
+        st.markdown("""
+**はい、できます！**
+
+**$200〜$500** あれば「コール買い」「プット買い」が可能です。
+
+安い株（例：インテルなど）のオプションなら **$50〜$100** 程度のプレミアムもあります。
+スキャナーで「クイックスキャン」を実行すると、実際の金額を確認できます。
+""")
+
+    with st.expander("軍資金が少ないとどの戦略がおすすめ？"):
+        st.markdown("""
+| 軍資金 | おすすめ戦略 |
+|--------|-------------|
+| **$200〜$500** | コール買い・プット買い（少額で大きなリターンを狙える） |
+| **$1,000〜$5,000** | プット売り（OTM遠め）（プレミアム受取で安定収入） |
+| **$5,000〜$15,000** | カバードコール or CSP（安い株なら100株購入も可能） |
+| **$15,000以上** | 全戦略が選択肢に入る |
+
+> スキャナーに軍資金を入力すると、あなたの資金で取引可能な銘柄だけが表示されます。
+""")
+
+    st.markdown("---")
+
+    # --- 戦略に関する質問 ---
+    st.markdown("### 📋 戦略について")
+
+    with st.expander("カバードコールって何ですか？"):
+        st.markdown("""
+**すでに100株持っている株のコール（上がる権利）を売る戦略**です。
+
+- 株を持ちながら「上値の権利」を売って、毎月プレミアム（お金）を受け取ります
+- 株価が大きく上がると利益に上限がつきますが、横ばい〜緩やかな上昇なら安定した収入源になります
+- **必要なもの**：対象銘柄の株を100株保有していること
+""")
+
+    with st.expander("プット売り（CSP）って何ですか？"):
+        st.markdown("""
+**「この株を○○ドルで買います」と約束して、プレミアムを先に受け取る戦略**です。
+
+- 株価が下がらなければ、プレミアムがそのまま利益になります
+- 株価が下がったら、約束通り100株を購入することになります（買いたい株なら問題なし）
+- **必要なもの**：株価×100ドル分の購入資金（例：$150の株なら$15,000）
+""")
+
+    with st.expander("プット売り（OTM遠め）って何ですか？"):
+        st.markdown("""
+**現在の株価から10〜20%離れた（安い）ストライクのプットを売る戦略**です。
+
+- 株が多少下がっても大丈夫な、余裕のある場所を狙います
+- プレミアムが半分になった時点で買い戻して利確するのが基本ルール
+- 100株を購入する必要はありません（証拠金取引）
+- **必要なもの**：証拠金（ブローカーにより異なる。数千ドル程度）
+
+> 例：株価$100の銘柄 → ストライク$80〜$90のプットを売る
+""")
+
+    with st.expander("コール買い・プット買いって何ですか？"):
+        st.markdown("""
+**少ない資金で大きなリターンを狙う戦略**です。
+
+**コール買い** 🚀
+- 株が**上がる**と予想したときに使います
+- RSI・移動平均が上昇トレンドを示しているときに有効
+- 当たれば数倍になることも
+
+**プット買い** 📉
+- 株が**下がる**と予想したときに使います
+- 下落トレンド時、暴落局面では数倍〜数十倍になることも
+
+> ⚠️ どちらも株価が予想通りに動かなければ、投資額（プレミアム）がゼロになるリスクがあります。
+""")
+
+    with st.expander("どの戦略を選べばいいかわかりません"):
+        st.markdown("""
+スキャナーの **🔰 初心者モード** で以下の2つの質問に答えるだけで、AIが最適な戦略を自動で選んでくれます：
+
+1. **対象銘柄の株を100株持っていますか？** → 持っていれば「カバードコール」
+2. **プット売りの場合、100株購入してもよいですか？** → OKなら「CSP」、NGなら「OTM遠め」
+
+買いシグナルの場合は、テクニカル（RSI・移動平均）に基づいてコール買い or プット買いを自動で提案します。
+""")
+
+    st.markdown("---")
+
+    # --- 操作に関する質問 ---
+    st.markdown("### 🔧 アプリの使い方")
+
+    with st.expander("株をやったことなくても大丈夫？"):
+        st.markdown("""
+**大丈夫です！**
+
+このアプリの **🔰 初心者モード** を使えば、AIが「どの銘柄を・どんな戦略で・いくらで入るか」を具体的に提案します。
+
+まずは **少額のコール買い・プット買い** から体験してみましょう。
+""")
+
+    with st.expander("スキャンモードの違いは？"):
+        st.markdown("""
+| モード | 銘柄数 | 所要時間 | おすすめの使い方 |
+|--------|--------|----------|-----------------|
+| ⚡ クイックスキャン | 約30銘柄 | 30秒〜1分 | 毎日の日課に最適 |
+| 📊 スタンダード | 約60銘柄 | 1〜2分 | 週1回のしっかり分析 |
+| 🔍 フルスキャン | 100銘柄以上 | 3〜5分 | 新しい銘柄を発掘したいとき |
+""")
+
+    with st.expander("作戦ナビはどう使いますか？"):
+        st.markdown("""
+**気になる銘柄を1つ入力して、AIに具体的な作戦を立ててもらう機能**です。
+
+1. 「作戦ナビ」タブを開く
+2. 銘柄名（例：AAPL、テスラ）を入力
+3. 軍資金・証券会社を設定
+4. 「作戦を立てる」ボタンを押す
+
+AIが、その銘柄の今日の状況に合わせた **具体的なストライク・満期日・プレミアム・損切りルール** を提案してくれます。
+""")
+
+    st.markdown("---")
+
+    # --- 用語集 ---
+    st.markdown("### 📖 オプション用語集")
+    for term, desc in GLOSSARY.items():
+        st.markdown(f"**{term}**：{desc}")

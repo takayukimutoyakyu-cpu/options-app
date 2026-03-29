@@ -1,0 +1,5 @@
+
+# TAISUN Agent（シンボリックリンク・設定ファイル）
+.claude/
+.mcp.json
+.env
