@@ -1207,7 +1207,7 @@ with tab1:
 """
             try:
                 msg = client.messages.create(
-                    model="claude-opus-4-6",
+                    model="claude-sonnet-4-6",
                     max_tokens=2000,
                     messages=[{"role": "user", "content": prompt}]
                 )
@@ -1452,7 +1452,7 @@ ATM Put: {ydata.get('puts_sample','データなし')[:300]}
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             try:
                 msg = client.messages.create(
-                    model="claude-opus-4-6",
+                    model="claude-sonnet-4-6",
                     max_tokens=2000,
                     messages=[{"role": "user", "content": prompt}]
                 )
